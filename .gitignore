@@ -3,12 +3,14 @@
 __pycache__/
 *.pyc
 
-# Data (keep raw EDFs out of git)
+# Keep raw EDFs and DB out of git
 data_raw/
-data_out/
-*.db
-*.sqlite
-*.sqlite3
+data_out/*.db
+data_out/*.sqlite
+data_out/*.sqlite3
+
+# BUT allow exported CSV artefacts
+!data_out/*.csv
 
 # OS/editor
 .DS_Store
