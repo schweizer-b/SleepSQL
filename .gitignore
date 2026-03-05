@@ -16,4 +16,17 @@ data_out/*.sqlite3
 .DS_Store
 .vscode/
 
+# DBeaver config
+dbeaver/
+.dbeaver/
+
+# Extras files like personal reports and png
+*.pdf
+*.png
+*.txt
+
+# BUT allow those in doc folder
+!docs/*.pdf
+!docs/*.png
+
 ## NB: (later it can be decided to commit small demo CSVs if you want, but default is: don’t.)
