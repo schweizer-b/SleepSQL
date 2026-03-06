@@ -3,6 +3,8 @@
 This project builds a small relational database from Sleep-EDF (PhysioNet) hypnogram annotations and demonstrates practical SQL analytics:
 joins, aggregation, cohort selection/QC rules, views, and window functions.
 
+## NOTE: Some metadata variables (recording_date, BMI, stress levels) are synthetically generated for demonstration purposes.
+
 ## What’s in the database
 - Participants → Sessions (nights) → 30s Epochs → Sleep stages (W/N1/N2/N3/REM/UNKNOWN)
 - Raw EEG samples are not stored in SQL; only metadata + epoch-level labels are stored.

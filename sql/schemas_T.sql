@@ -35,7 +35,8 @@ CREATE TABLE patients_T (
     patients_id INTEGER PRIMARY KEY,                    -- w PK one should always use INTEGER ant not INT
     patients_code VARCHAR(8) NOT NULL UNIQUE,
     age INT CHECK (age between 17 and 100),             -- or: age INT CHECK (age >= 17 AND age <= 100)
-    sex TEXT CHECK (sex LIKE 'M%' OR sex LIKE 'F%' OR sex LIKE 'O%')    -- or to be more controlled: sex TEXT CHECK (sex IN ('M','F','O'))   or   sex = 'M' OR sex = 'F' OR sex = 'W' OR sex = 'O'
+    sex TEXT CHECK (sex LIKE 'M%' OR sex LIKE 'F%' OR sex LIKE 'O%'),    -- or to be more controlled: sex TEXT CHECK (sex IN ('M','F','O'))   or   sex = 'M' OR sex = 'F' OR sex = 'W' OR sex = 'O'
+    bmi INT CHECK (bmi between 1 and 70)
 ); 
 
 
