@@ -62,7 +62,7 @@ CREATE TABLE epochs_T (
     epoch_idx INT CHECK (epoch_idx >= 0) NOT NULL,
     start_sec INT CHECK (start_sec >= 0) NOT NULL,
     duration_sec INT NOT NULL DEFAULT 30,
-    stage_label VARCHAR(10) NOT NULL,
+    stage_label TEXT NOT NULL CHECK (stage_label IN ('W','N1','N2','N3','REM','UNKNOWN')),
     FOREIGN KEY (rec_id) REFERENCES recordings_T(rec_id) ON DELETE CASCADE,
     UNIQUE (rec_id, epoch_idx)
 );
