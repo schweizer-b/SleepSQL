@@ -50,14 +50,14 @@ SELECT
     r.rec_id,
     p.patients_code,
     r.rec_code,
-    v.has_obs,
-    v.obs_count,
+    COALESCE(v.has_obs, 0) AS has_obs,             -- if v.has_obs is not NULL → return it. if v.has_obs is NULL → return 0
+    COALESCE(v.obs_count, 0) AS obs_count,         -- NB: maybe not incl in a real case
     ROUND((se.last_sleep_epoch - se.first_sleep_epoch + 1) * 30.0 / 60.0, 1) AS sleep_window_min,
     se.first_sleep_epoch,
     se.last_sleep_epoch
 FROM recordings_T r
 JOIN patients_T p ON p.patients_id = r.patients_id 
-JOIN v_notes v ON v.rec_id = r.rec_id
+LEFT JOIN v_notes v ON v.rec_id = r.rec_id
 JOIN sleep_epochs se ON se.rec_id = r.rec_id;
 
 -- 3) In bed window per recording/session / Windowed Epochs View:
@@ -126,10 +126,7 @@ SELECT
     ROUND(sleep_epochs * 30.0 / 60.0, 1) AS tst_min,
     ROUND(sleep_epochs * 30.0 / 3600.0, 2) AS tst_h,
 
-    -- REM percentage of TST
-    ROUND(100.0 * rem_epochs / NULLIF(sleep_epochs,0), 1) AS rem_pct_tst,
-
-  -- Wake after sleep onset within the window (WASO proxy)
+   -- Wake after sleep onset within the window (WASO proxy)
     ROUND(wake_epochs * 30.0 / 60.0, 1) AS wake_in_window_min,
 
   -- Stages duration
@@ -139,6 +136,11 @@ SELECT
 -- Percentages inside sleep window
     ROUND(100.0 * sleep_epochs / window_epochs, 1) AS sleep_pct_window,
     ROUND(100.0 * unknown_epochs / window_epochs, 1) AS unknown_pct_window,
+
+   -- Stages percentage of TST
+    ROUND(100.0 * rem_epochs / NULLIF(sleep_epochs,0), 1) AS rem_pct_tst,
+    ROUND(100.0 * N2_N3_epochs / NULLIF(sleep_epochs,0), 1) AS N2_N3_pct_tst,
+    ROUND(100.0 * wake_epochs / NULLIF(sleep_epochs,0), 1) AS wake_pct_tst,
 
 
 -- Sleep efficiency within window

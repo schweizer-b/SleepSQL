@@ -4,45 +4,57 @@
 -- Run ad-hoc with:
 -- sqlite3 -header -column data_out/sleepedf_T.db ".read sql/queries.sql"
 
--- Q1) Basic join + aggregation: stage minutes per session (within sleep window)
+-- Q1) Basic join + aggregation: total sleep minutes per session (within sleep window)
 SELECT
-  subject_code,
-  psg_filename,
-  stage,
+  v.patients_code,
+  r.psg_filename,
+  ROUND(
+  SUM(CASE WHEN stage_label IN ('N1','N2','N3','REM') THEN 1 ELSE 0 END) * 30.0 / 60.0,1) AS total_sleep_min
+  FROM v_in_bed_window v
+JOIN recordings_T r ON r.rec_id = v.rec_id 
+GROUP BY v.patients_code, r.psg_filename
+ORDER BY v.patients_code, r.psg_filename;
+
+-- NOTE: v_sleep_summary was not used for practising purposes 
+
+-- Q2) Basic join + aggregation: stage minutes per session (within sleep window)
+SELECT
+  v.patients_code,
+  r.psg_filename,
+  v.stage_label,
   ROUND(COUNT(*) * 30.0 / 60.0, 1) AS minutes
-FROM v_epoch_stage
-WHERE session_id IN (SELECT session_id FROM v_sleep_window)  -- only sessions with detected sleep window
-  AND epoch_index BETWEEN
-      (SELECT first_sleep_epoch FROM v_sleep_window w WHERE w.session_id = v_epoch_stage.session_id)
-  AND (SELECT last_sleep_epoch  FROM v_sleep_window w WHERE w.session_id = v_epoch_stage.session_id)
-GROUP BY subject_code, psg_filename, stage
-ORDER BY subject_code, psg_filename,
-         CASE stage WHEN 'W' THEN 0 WHEN 'N1' THEN 1 WHEN 'N2' THEN 2 WHEN 'N3' THEN 3 WHEN 'REM' THEN 4 ELSE 5 END;
-         
+  FROM v_in_bed_window v
+JOIN recordings_T r ON r.rec_id = v.rec_id 
+GROUP BY v.patients_code, r.psg_filename, v.stage_label
+ORDER BY v.patients_code, r.psg_filename,
+        -- physiological sleep order instead of alphabetical. The CASE is used only inside ORDER BY for sorting:
+         CASE v.stage_label WHEN 'W' THEN 0 WHEN 'N1' THEN 1 WHEN 'N2' THEN 2 WHEN 'N3' THEN 3 WHEN 'REM' THEN 4 ELSE 5 END;
+
 -- Purpose:
     -- Counts how many minutes each sleep stage occurred within the sleep window of each session.
-    -- Uses v_epoch_stage view to simplify joins.
+    -- Uses v_in_bed_window view to simplify joins.
     -- Aggregates per subject, per session, per stage.
     -- Orders stages in a logical sleep order (W → N1 → N2 → N3 → REM → unknown).
 
 
--- Q2) “Night summary” view output (one row per night)
+-- Q3) “Night/Sleep summary” view output (one row per night)
 SELECT
-  subject_code, psg_filename,
-  sleep_window_h, tst_h, wake_in_window_min,
-  sleep_eff_window, rem_latency_min, unknown_pct_window
-FROM v_night_sleep_summary
-ORDER BY subject_code;
+  patients_code, rec_code,
+  in_bed_window_h, tst_h, wake_in_window_min,
+  sleep_eff_window, rem_latency_min, 
+  rem_pct_tst, N2_N3_pct_tst, unknown_pct_window
+FROM v_sleep_summary
+ORDER BY patients_code;
 
 -- Purpusoe:
-    -- Retrieves precomputed summary metrics from the v_night_sleep_summary view.
+    -- Retrieves precomputed summary metrics from the v_sleep_summary view.
     -- This is basically a report-like extraction; simpler than Q1 because all aggregations are already done.
 
 
--- Q3) Cohort selection (HAVING + thresholds) — “analysis-ready nights”
+-- Q4) Cohort selection (HAVING + thresholds) — “analysis-ready nights”
 -- Example criteria: TST >= 6h, sleep efficiency >= 0.80, unknown <= 5%
 SELECT *
-FROM v_night_sleep_summary
+FROM v_sleep_summary
 WHERE tst_h >= 6.0
   AND sleep_eff_window >= 0.80
   AND unknown_pct_window <= 5.0
@@ -54,15 +66,13 @@ ORDER BY tst_h DESC;
 
 
 
--- Q4) CTE example: compare REM percentage across nights
+-- Q5) CTE example: compare REM percentage across nights    ???????
 WITH base AS (
   SELECT
-    subject_code,
-    psg_filename,
-    rem_min,
+    patients_code,
     tst_min,
     ROUND(100.0 * rem_min / NULLIF(tst_min, 0), 1) AS rem_pct_of_sleep
-  FROM v_night_sleep_summary
+  FROM v_sleep_summary
 )
 SELECT *
 FROM base
@@ -75,20 +85,20 @@ ORDER BY rem_pct_of_sleep DESC;
 
 
 
--- Q5) QC-style ranking: nights with most UNKNOWN in sleep window
+-- Q6) QC-style ranking: nights with most UNKNOWN in sleep window   ???????
 SELECT
-  subject_code, psg_filename,
+  patients_code, 
   unknown_pct_window, unknown_pct_window || '%' AS unknown_pct_label
-FROM v_night_sleep_summary
+FROM v_sleep_summary
 ORDER BY unknown_pct_window DESC;
 
--- Q6) Distribution check: epochs by stage across all included sessions (aggregation)
+-- Q7) Distribution check: epochs by stage across all included sessions (aggregation)   ???????
 SELECT
-  stage,
+  stage_label,
   COUNT(*) AS n_epochs,
   ROUND(COUNT(*) * 30.0 / 3600.0, 2) AS hours_total
-FROM v_epoch_stage
-GROUP BY stage
+FROM epochs_T
+GROUP BY stage_label
 ORDER BY n_epochs DESC;
 
 
@@ -97,6 +107,9 @@ ORDER BY n_epochs DESC;
 -- Advanced (window functions): Step 7
 -- =========================================
 -- Note: 1 epoch = 30s = 0.5 minutes
+
+-- Q??) Comparing totals w averages !!!!!
+
 
 -- Q7) Stage transitions per night (fragmentation proxy)
 -- Counts how often the stage changes from one epoch to the next within the sleep window.
