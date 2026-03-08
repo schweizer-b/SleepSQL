@@ -66,33 +66,81 @@ ORDER BY tst_h DESC;
 
 
 
--- Q5) CTE example: compare REM percentage across nights    ???????
-WITH base AS (
-  SELECT
-    patients_code,
-    tst_min,
-    ROUND(100.0 * rem_min / NULLIF(tst_min, 0), 1) AS rem_pct_of_sleep
-  FROM v_sleep_summary
-)
+-- Q5) Compare each patient deep sleep pct with the cohort average 
+
+SELECT
+   patients_code,
+   tst_min,
+   N2_N3_pct_tst,
+   ROUND(AVG (N2_N3_pct_tst) OVER (), 1) AS avg_deep_sleep
+FROM v_sleep_summary;
+
+-- Q) which rows are outliers 
+-- SELECT
+--     patients_code,
+--     N2_N3_pct_tst,
+--     AVG(N2_N3_pct_tst) OVER () AS mean_val,
+--     STDDEV(N2_N3_pct_tst) OVER () AS sd_val,
+--     CASE
+--         WHEN ABS(N2_N3_pct_tst - AVG(N2_N3_pct_tst) OVER ())
+--              > 2 * STDDEV(N2_N3_pct_tst) OVER ()
+--         THEN 'outlier'
+--         ELSE 'normal'
+--     END AS status
+-- FROM v_sleep_summary;
+
+
+-- Q5) Subquery and window: select only 
+
+-- SELECT
+--     patients_code,
+--     tst_min,
+--     N2_N3_pct_tst
+-- FROM (
+--     SELECT
+--         patients_code,
+--         tst_min,
+--         N2_N3_pct_tst,
+--         AVG(N2_N3_pct_tst) OVER () AS mean_val,
+--         STDDEV(N2_N3_pct_tst) OVER () AS sd_val
+--     FROM v_sleep_summary
+-- ) t
+-- WHERE ABS(N2_N3_pct_tst - mean_val) <= 2 * sd_val;
+
+---- NOTE: SQLite does not have a built-in STDDEV() function
+
 SELECT *
-FROM base
-ORDER BY rem_pct_of_sleep DESC;
+FROM (
+    SELECT
+        patients_code,
+        tst_min,
+        N2_N3_pct_tst,
+        ROUND(AVG(N2_N3_pct_tst) OVER (), 2) AS mean_val,
+        SQRT(
+            AVG(N2_N3_pct_tst * N2_N3_pct_tst) OVER ()
+            - AVG(N2_N3_pct_tst) OVER () * AVG(N2_N3_pct_tst) OVER ()
+        ) AS sd_val
+    FROM v_sleep_summary
+) t
+WHERE ABS(N2_N3_pct_tst - mean_val) <= 2 * sd_val;
 
-    -- WITH base AS (...) defines a temporary “named result set”.
-    -- You can then query it as if it were a table.
-    -- Useful for multi-step calculations (like REM percentage of total sleep).
-    -- NULLIF(tst_min, 0) prevents division by zero.
 
+-- Q6) QC-style ranking: nights with most UNKNOWN in sleep window   
+-- identify nights/sessions with potential data quality issues
 
-
--- Q6) QC-style ranking: nights with most UNKNOWN in sleep window   ???????
 SELECT
   patients_code, 
-  unknown_pct_window, unknown_pct_window || '%' AS unknown_pct_label
+  unknown_pct_window, unknown_pct_window || '%' AS unknown_pct_label   -- concatenates the number with a percent sign
+  CASE
+        WHEN unknown_pct_window <= 5 THEN 'OK'
+        WHEN unknown_pct_window <= 20 THEN 'REVIEW'
+        ELSE 'BAD'
+    END AS qc_flag
 FROM v_sleep_summary
 ORDER BY unknown_pct_window DESC;
 
--- Q7) Distribution check: epochs by stage across all included sessions (aggregation)   ???????
+
+-- Q7) Distribution check: epochs by stage across all included sessions (aggregation)   
 SELECT
   stage_label,
   COUNT(*) AS n_epochs,
@@ -108,43 +156,46 @@ ORDER BY n_epochs DESC;
 -- =========================================
 -- Note: 1 epoch = 30s = 0.5 minutes
 
--- Q??) Comparing totals w averages !!!!!
-
-
 -- Q7) Stage transitions per night (fragmentation proxy)
 -- Counts how often the stage changes from one epoch to the next within the sleep window.
-WITH in_window AS (
-  SELECT es.*
-  FROM v_epoch_stage es
-  JOIN v_sleep_window w ON w.session_id = es.session_id
-  WHERE es.epoch_index BETWEEN w.first_sleep_epoch AND w.last_sleep_epoch
-),
-base AS (
+
+WITH base AS (
   SELECT
-    subject_code,
-    session_id,
-    psg_filename,
-    epoch_index,
-    stage,
-    LAG(stage) OVER (PARTITION BY session_id ORDER BY epoch_index) AS prev_stage
-  FROM in_window
+    v.patients_code,
+    v.rec_id,
+    v.epoch_idx,
+    v.stage_label,
+    LAG(v.stage_label) OVER (PARTITION BY v.rec_id ORDER BY v.epoch_idx) AS prev_stage
+  FROM v_in_bed_window v
 )
+
 SELECT
-  subject_code,
-  psg_filename,
-  SUM(CASE WHEN prev_stage IS NOT NULL AND stage <> prev_stage THEN 1 ELSE 0 END) AS n_stage_transitions,
+  b.patients_code,
+  b.rec_id,
+
+  SUM(
+    CASE
+      WHEN b.prev_stage IS NOT NULL AND b.stage_label <> b.prev_stage THEN 1 ELSE 0
+    END
+  ) AS n_stage_transitions,
+
   ROUND(
-    1.0 * SUM(CASE WHEN prev_stage IS NOT NULL AND stage <> prev_stage THEN 1 ELSE 0 END)
-    / NULLIF((SELECT sleep_window_h FROM v_night_sleep_summary ns WHERE ns.psg_filename = base.psg_filename), 0),
-    2
-  ) AS transitions_per_hour_window
-FROM base
-GROUP BY subject_code, psg_filename
+    1.0 * SUM(                                  -- With 1.0 * SQL sees a decimal number
+      CASE
+        WHEN b.prev_stage IS NOT NULL AND b.stage_label <> b.prev_stage THEN 1 ELSE 0 
+      END) / NULLIF(s.in_bed_window_h, 0), 2)   -- if = 0 --> return NULL
+      AS transitions_per_hour_window            -- normalise by sleep window - makes sessions comparable across nights of different length
+FROM base b
+JOIN v_sleep_summary s ON s.rec_id = b.rec_id
+GROUP BY b.patients_code, b.rec_id, s.in_bed_window_h
 ORDER BY transitions_per_hour_window DESC;
+
+
 
     -- LAG() is a window function → looks at the previous row’s value.
     -- Helps calculate stage transitions per night as a proxy for fragmentation.
     -- Window functions work on ordered subsets (here, PARTITION BY session_id ORDER BY epoch_index).
+
 
 
 
