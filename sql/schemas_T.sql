@@ -1,46 +1,69 @@
--- Purpose: 
-    --define the database structure. The schema is the blueprint: what tables exist, which columns they have, 
-    --and how they link together.
--- Run with: sqlite3 data_out/sleepedf_T.db ".read sql/schemas_T.sql"
+-- ==========================================================
+-- Sleep-EDF Database Schema
+-- ==========================================================
+-- Purpose:
+-- Defines the relational database structure used in the
+-- Sleep-EDF project.
+--
+-- The schema acts as a blueprint:
+--   • Tables
+--   • Columns
+--   • Relationships
+--
+-- Hierarchy:
+-- patients_T → recordings_T → epochs_T
+-- recordings_T → notes_T
+--
+-- Run with:
+-- sqlite3 data_out/sleepedf_T.db ".read sql/schemas_T.sql"
+-- ==========================================================
 
-PRAGMA foreign_keys = ON; -- This turns them on so that references between tables (like participant → session → epoch) are enforced.
 
--- -- Disable FK checks to safely drop tables
--- PRAGMA foreign_keys = OFF;
-
--- -- Drop child → parent
--- DROP TABLE IF EXISTS session_qc;
--- DROP TABLE IF EXISTS qc_epoch_flags;
--- DROP TABLE IF EXISTS sleep_stages;
--- DROP TABLE IF EXISTS epochs;
--- DROP TABLE IF EXISTS sessions;
--- DROP TABLE IF EXISTS participants;
-
--- -- Turn FK checks back on
--- PRAGMA foreign_keys = ON;
+-- ==========================================================
+-- 0) SQLite Configuration
+-- ==========================================================
+PRAGMA foreign_keys = ON; -- Ensure relational integrity (FKs enforced)
 
 
-PRAGMA foreign_keys = OFF;   -- turn off FKs to allow dropping tables
+-- ==========================================================
+-- 1) Reset tables (safe re-run)
+-- ==========================================================
+-- Temporarily disable FK checks to drop tables in any order
+PRAGMA foreign_keys = OFF;
 
 DROP TABLE IF EXISTS notes_T;
 DROP TABLE IF EXISTS epochs_T;
 DROP TABLE IF EXISTS recordings_T;
 DROP TABLE IF EXISTS patients_T;
 
-PRAGMA foreign_keys = ON;    -- re-enable FKs
+PRAGMA foreign_keys = ON;  -- Re-enable FK checks
 
--- 1) Participants (one person) - Each participant (person in the study) gets one row.
+
+
+-- ==========================================================
+-- 2) Patients Table
+-- ==========================================================
+-- Each row = one participant
+-- patients_code: human-readable ID
+-- age, sex, bmi: constrained for realistic values
 
 CREATE TABLE patients_T (                                 
-    patients_id INTEGER PRIMARY KEY,                    -- w PK one should always use INTEGER ant not INT
+    patients_id INTEGER PRIMARY KEY,                    
     patients_code VARCHAR(8) NOT NULL UNIQUE,
-    age INT CHECK (age between 17 and 100),             -- or: age INT CHECK (age >= 17 AND age <= 100)
-    sex TEXT CHECK (sex LIKE 'M%' OR sex LIKE 'F%' OR sex LIKE 'O%'),    -- or to be more controlled: sex TEXT CHECK (sex IN ('M','F','O'))   or   sex = 'M' OR sex = 'F' OR sex = 'W' OR sex = 'O'
-    bmi INT CHECK (bmi between 1 and 70)
+    age INT CHECK (age BETWEEN 17 AND 100),             
+    sex TEXT CHECK (sex LIKE 'M%' OR sex LIKE 'F%' OR sex LIKE 'O%'),    
+    bmi INT CHECK (bmi BETWEEN 1 AND 70)
 ); 
 
 
--- 2) Sessions (one night / one study session) -- Each row = one sleep session / night / recording.
+
+-- ==========================================================
+-- 3) Recordings Table
+-- ==========================================================
+-- Each row = one sleep session / night
+-- patients_id → recordings (1:N)
+-- UNIQUE(patients_id, rec_code) ensures no duplicate session codes
+-- ON DELETE CASCADE: deleting a patient removes recordings
 
 CREATE TABLE recordings_T (
     rec_id INTEGER PRIMARY KEY,
@@ -48,13 +71,20 @@ CREATE TABLE recordings_T (
     rec_code VARCHAR(3) NOT NULL,
     psg_filename VARCHAR(30) NOT NULL,
     hyp_filename VARCHAR(30) NOT NULL,
-    rec_date TEXT NOT NULL,                                                       -- PostgreSQL: DATE
-    rec_log TEXT,                                                                 -- PostgreSQL: TIMESTAMPTZ
+    rec_date TEXT NOT NULL,        -- could be DATE in other RDBMS
+    rec_log TEXT,                  -- optional notes
     FOREIGN KEY (patients_id) REFERENCES patients_T(patients_id) ON DELETE CASCADE,
     UNIQUE (patients_id, rec_code)
 );
 
--- 3) Epochs (one row per 30s epoch)
+
+
+-- ==========================================================
+-- 4) Epochs Table
+-- ==========================================================
+-- Each row = one 30-second epoch within a recording
+-- stage_label = sleep stage classification
+-- epoch_idx = sequential number within recording
 
 CREATE TABLE epochs_T (
     epochs_id INTEGER PRIMARY KEY,
@@ -67,27 +97,26 @@ CREATE TABLE epochs_T (
     UNIQUE (rec_id, epoch_idx)
 );
 
--- NOTE Sleep stages (label per epoch) was incl in Epochs table
+-- NOTE: Sleep stages are included directly in epochs_T
 
--- 4) Questionnaire answers
+
+
+-- ==========================================================
+-- 5) Notes / Questionnaire Table
+-- ==========================================================
+-- Each row = context information for one recording
+-- Boolean variables stored as 0/1
+-- Can be used to flag sessions with observations
 
 CREATE TABLE notes_T (
     rec_id  INTEGER PRIMARY KEY,
-    had_coffee INT NOT NULL CHECK (had_coffee IN (0,1)),             -- PostgreSQL: BOOLEAN
-    had_alcohol INT NOT NULL CHECK (had_alcohol IN (0,1)),           -- PostgreSQL: BOOLEAN
-    has_pain INT NOT NULL CHECK (has_pain IN (0,1)),                 -- PostgreSQL: BOOLEAN
-    sleep_deprived INT NOT NULL CHECK (sleep_deprived IN (0,1)),     -- PostgreSQL: BOOLEAN
-    stress INT NOT NULL CHECK (stress IN (0,1)),                     -- PostgreSQL: BOOLEAN
+    had_coffee INT NOT NULL CHECK (had_coffee IN (0,1)),             
+    had_alcohol INT NOT NULL CHECK (had_alcohol IN (0,1)),           
+    has_pain INT NOT NULL CHECK (has_pain IN (0,1)),                 
+    sleep_deprived INT NOT NULL CHECK (sleep_deprived IN (0,1)),     
+    stress INT NOT NULL CHECK (stress IN (0,1)),                     
     FOREIGN KEY (rec_id) REFERENCES recordings_T(rec_id) ON DELETE CASCADE
 );
 
 
----------------------------------------------------------------------------------
 
--- Helpful indexes (speed up joins and aggregations)
--- Example: filtering all N2 stages → idx_stages_stage helps SQLite find rows faster
--- [table name](colunm)
-CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
-CREATE INDEX IF NOT EXISTS idx_epochs_session      ON epochs(session_id);
-CREATE INDEX IF NOT EXISTS idx_stages_stage        ON sleep_stages(stage);
-CREATE INDEX IF NOT EXISTS idx_qc_epoch            ON qc_epoch_flags(epoch_id);

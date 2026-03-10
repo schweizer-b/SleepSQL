@@ -1,16 +1,69 @@
+-- ==========================================================
+-- Sleep-EDF Derived Views
+-- ==========================================================
+-- This file defines analytical views used to progressively
+-- transform raw sleep staging data into analysis-ready metrics.
+--
+-- View pipeline:
+--
+-- notes_T
+--   ↓
+-- v_notes
+--   ↓
+-- v_sleep_boundaries
+--   ↓
+-- v_in_bed_window
+--   ↓
+-- v_sleep_summary  (main analytical view)
+--
+-- Each layer adds structure and derived metrics that simplify
+-- downstream SQL analysis queries.
+--
 -- Run with:
 -- sqlite3 data_out/sleepedf_T.db ".read sql/views_T.sql"
+-- ==========================================================
+
 
 PRAGMA foreign_keys = ON;                                        -- SQLite disables FK enforcement by default.
+
+
+
+-- ==========================================================
+-- CLEANUP PREVIOUS VIEWS
+-- ==========================================================
+-- Dropping views ensures the script can be re-run safely.
 
 DROP VIEW IF EXISTS v_epoch_stage;
 DROP VIEW IF EXISTS v_sleep_window;
 DROP VIEW IF EXISTS v_night_sleep_summary;
 
+DROP VIEW IF EXISTS v_notes;
+DROP VIEW IF EXISTS v_sleep_boundaries;
+DROP VIEW IF EXISTS v_in_bed_window;
+DROP VIEW IF EXISTS v_sleep_summary;
 
--- 1) View combining notes/obs
+
+
+-- ==========================================================
+-- 1) SESSION NOTES / OBSERVATIONS
+-- ==========================================================
+-- Combines contextual observations recorded for each
+-- sleep session (e.g. caffeine intake, alcohol, stress).
+--
+-- Two derived fields are created:
+--
+--   has_obs
+--     Boolean indicator (0/1) showing whether any
+--     observation occurred during the session.
+--
+--   obs_count
+--     Number of positive observations.
+--
+-- These variables may later be used for cohort comparisons
+-- or exploratory analyses.
 
 DROP VIEW IF EXISTS v_notes;
+
 CREATE VIEW v_notes AS 
 SELECT
     rec_id,
@@ -25,18 +78,33 @@ SELECT
         ELSE 0
     END AS has_obs,
 
-    (had_coffee + had_alcohol + has_pain + sleep_deprived + stress)  -- -- Count of positive answers
+    (had_coffee + had_alcohol + has_pain + sleep_deprived + stress)  -- Count of positive answers
     AS obs_count
 FROM notes_T;
 
--- NB: ❌ You cannot use SUM() directly inside the same row like that. ✅ You can use SUM() when aggregating across rows.
+-- NB: ❌ You cannot use SUM() directly inside the same row like that.
+-- ✅ You can use SUM() when aggregating across rows.
 
 
 
--- 2) Sleep boundaries to calculate window per recording/session:
--- first_sleep_epoch = first epoch that is not Wake/Unknown (i.e., N1/N2/N3/REM)
--- last_sleep_epoch  = last epoch that is not Wake/Unknown
+-- ==========================================================
+-- 2) SLEEP BOUNDARIES PER SESSION
+-- ==========================================================
+-- Determines the first and last sleep epochs within
+-- each recording.
+--
+-- first_sleep_epoch
+--     first epoch that is not Wake/Unknown
+--     (i.e. N1/N2/N3/REM)
+--
+-- last_sleep_epoch
+--     last epoch that is not Wake/Unknown
+--
+-- These boundaries define the sleep window used in most
+-- downstream analyses.
+
 DROP VIEW IF EXISTS v_sleep_boundaries;
+
 CREATE VIEW v_sleep_boundaries AS
 WITH sleep_epochs AS (
     SELECT
@@ -45,7 +113,8 @@ WITH sleep_epochs AS (
         MAX(epoch_idx) AS last_sleep_epoch
     FROM epochs_T
     WHERE stage_label IN ('N1','N2','N3','REM')
-    GROUP BY rec_id )
+    GROUP BY rec_id
+)
 SELECT
     r.rec_id,
     p.patients_code,
@@ -60,7 +129,21 @@ JOIN patients_T p ON p.patients_id = r.patients_id
 LEFT JOIN v_notes v ON v.rec_id = r.rec_id
 JOIN sleep_epochs se ON se.rec_id = r.rec_id;
 
--- 3) In bed window per recording/session / Windowed Epochs View:
+
+
+-- ==========================================================
+-- 3) IN-BED WINDOW (WINDOWED EPOCHS VIEW)
+-- ==========================================================
+-- Extracts only epochs that fall within the sleep window
+-- defined above.
+--
+-- Each row corresponds to one 30-second epoch within
+-- the detected sleep window of a recording.
+--
+-- This dataset is used to compute most sleep metrics.
+
+-- Alternative minimal implementation (kept for reference):
+--
 -- DROP VIEW IF EXISTS v_in_bed_window;
 -- CREATE VIEW v_in_bed_window AS
 -- SELECT
@@ -70,6 +153,7 @@ JOIN sleep_epochs se ON se.rec_id = r.rec_id;
 -- WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
 
 DROP VIEW IF EXISTS v_in_bed_window;
+
 CREATE VIEW v_in_bed_window AS
 SELECT
     sb.rec_id,
@@ -80,17 +164,34 @@ SELECT
     sb.sleep_window_min, 
     e.epoch_idx,
     e.stage_label
-    FROM v_sleep_boundaries sb
-    JOIN epochs_T e ON e.rec_id = sb.rec_id
-    WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
+FROM v_sleep_boundaries sb
+JOIN epochs_T e ON e.rec_id = sb.rec_id
+WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
 
--- 4) Nightly summary (main “portfolio” view) -- One row per night (per session) with all sleep metrics calculated:
-    -- Total sleep time and sleep letency (onset)
-    -- Total stage time and stage letency (REM and Deep sleep N2/N3)
-    -- Number of W in the sleep window (fragmented sleep)
+
+
+-- ==========================================================
+-- 4) NIGHTLY SLEEP SUMMARY (MAIN ANALYTICAL VIEW)
+-- ==========================================================
+-- Produces one row per recording/session with key sleep
+-- metrics.
+--
+-- This is the main analytical view used in most queries
+-- and dashboards.
+--
+-- Metrics include:
+--   • sleep window duration
+--   • total sleep time (TST)
+--   • wake after sleep onset (WASO proxy)
+--   • stage durations
+--   • stage percentages
+--   • sleep efficiency
+--   • sleep onset latency
+--   • REM latency
 
 DROP VIEW IF EXISTS v_sleep_summary;
-CREATE VIEW v_sleep_summary AS
+
+CREATE MATERIALISED VIEW v_sleep_summary AS
 WITH w AS (
     SELECT * FROM v_in_bed_window
 ),
@@ -111,11 +212,13 @@ counts AS (
     FROM w
     GROUP BY rec_id, patients_code, rec_code, has_obs, first_sleep_epoch
 )
+
 SELECT 
     rec_id,
     patients_code,
     rec_code,
     has_obs,
+
   -- Output final KPIs - KPI = Key Performance Indicator
 
   -- In bed window (minutes/hours)
@@ -142,7 +245,6 @@ SELECT
     ROUND(100.0 * N2_N3_epochs / NULLIF(sleep_epochs,0), 1) AS N2_N3_pct_tst,
     ROUND(100.0 * wake_epochs / NULLIF(sleep_epochs,0), 1) AS wake_pct_tst,
 
-
 -- Sleep efficiency within window
     ROUND(1.0 * sleep_epochs / window_epochs, 3) AS sleep_eff_window,         -- Why multiply by 1.0? Forces floating-point division
 
@@ -153,16 +255,3 @@ SELECT
     ELSE ROUND((first_rem_epoch - first_sleep_epoch) * 30.0 / 60.0, 1)          
   END AS rem_latency_min
 FROM counts;
-
-
-
-
-
-
-
-
-
-
-
-
-

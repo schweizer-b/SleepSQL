@@ -1,12 +1,50 @@
--- Run with:
+-- ==========================================================
+-- Indexes for Sleep-EDF SQL Project
+-- ==========================================================
+-- These indexes speed up joins, aggregations, and window
+-- functions used in queries.sql.
+--
+-- Run once after the database is built:
 -- sqlite3 data_out/sleepedf_T.db ".read sql/indexes.sql"
 
-CREATE INDEX idx_recordings_patient
+
+
+-- ==========================================================
+-- Foreign-key join indexes
+-- ==========================================================
+
+-- recordings → patients join
+CREATE INDEX IF NOT EXISTS idx_recordings_patient
 ON recordings_T(patients_id);
 
-CREATE INDEX idx_epochs_rec
+
+-- epochs → recordings join
+CREATE INDEX IF NOT EXISTS idx_epochs_rec
 ON epochs_T(rec_id);
 
--- Index to speed up window functions and joins on epochs
-CREATE INDEX idx_epochs_rec_epoch
+
+
+-- ==========================================================
+-- Window function optimisation
+-- ==========================================================
+-- Many queries use:
+-- PARTITION BY rec_id ORDER BY epoch_idx
+--
+-- This composite index allows SQLite to retrieve rows
+-- already grouped and ordered.
+
+CREATE INDEX IF NOT EXISTS idx_epochs_rec_epoch
 ON epochs_T(rec_id, epoch_idx);
+
+
+
+-- ==========================================================
+-- Stage filtering
+-- ==========================================================
+-- Helps stage distribution queries and QC checks.
+
+CREATE INDEX IF NOT EXISTS idx_epochs_stage
+ON epochs_T(stage_label);
+
+
+
