@@ -4,6 +4,86 @@
 -- Run ad-hoc with:
 -- sqlite3 -header -column data_out/sleepedf_T.db ".read sql/queries.sql"
 
+
+
+-- ==========================================================
+-- Step 7.5: Data QA (LEFT JOIN / anti-join) + Performance
+-- ==========================================================
+
+-- Q10 – Q14 – Data QA / Anti-joins
+    -- Checks for missing links in data (e.g., epochs without a stage).
+    -- Anti-joins are very common in research and clinical data pipelines for consistency checks.
+
+-- Q11) Anti-join: sessions with no detected sleep window (no N1/N2/N3/REM)
+SELECT
+  p.patients_code,
+  r.psg_filename,
+  r.hyp_filename
+FROM recordings_T r
+JOIN patients_T p ON p.patients_id = r.patients_id
+LEFT JOIN v_in_bed_window w ON w.rec_id = r.rec_id
+WHERE w.rec_id IS NULL
+ORDER BY p.patients_code, r.psg_filename;
+
+-- Q12) Anti-join: participants with no sessions (should be 0)
+SELECT
+  p.patients_code
+FROM patients_T p
+LEFT JOIN recordings_T r ON r.patients_id = p.patients_id
+WHERE r.rec_id IS NULL
+ORDER BY p.patients_code;
+
+
+-- Q13) Quick “dashboard” via UNION ALL (classic reporting pattern)
+SELECT 'patients' AS table_name, COUNT(*) AS n FROM patients_T
+UNION ALL
+SELECT 'recordings',     COUNT(*) FROM recordings_T
+UNION ALL
+SELECT 'epochs',       COUNT(*) FROM epochs_T;
+
+-- Q14) mini-report table -- whole rec
+SELECT 'epochs_total' AS metric, COUNT(*) AS value FROM epochs_T
+UNION ALL
+SELECT 'epochs_sleep', COUNT(*) FROM epochs_T WHERE stage_label IN ('N1','N2','N3','REM')
+UNION ALL
+SELECT 'epochs_wake', COUNT(*) FROM epochs_T WHERE stage_label='W'
+UNION ALL
+SELECT 'unknown_epochs', COUNT(*) FROM epochs_T WHERE stage_label='UNKNOWN';
+
+
+-- Q14) mini-report table -- in_bed windown only 
+SELECT 'in_bed_epochs_total' AS metric, COUNT(*) AS value FROM v_in_bed_window
+UNION ALL
+SELECT 'in_bed_epochs_sleep', COUNT(*) FROM v_in_bed_window WHERE stage_label IN ('N1','N2','N3','REM')
+UNION ALL
+SELECT 'in_bed_epochs_wake', COUNT(*) FROM v_in_bed_window WHERE stage_label='W'
+UNION ALL
+SELECT 'in_bed_unknown_epochs', COUNT(*) FROM v_in_bed_window WHERE stage_label='UNKNOWN';
+
+
+-- Q14.5) full-rec vs in_bed windown only 
+SELECT
+    'full_recording' AS scope,
+    COUNT(*) AS epochs_total,
+    SUM(CASE WHEN stage_label IN ('N1','N2','N3','REM') THEN 1 ELSE 0 END) AS epochs_sleep,
+    SUM(CASE WHEN stage_label='W' THEN 1 ELSE 0 END) AS epochs_wake,
+    SUM(CASE WHEN stage_label='UNKNOWN' THEN 1 ELSE 0 END) AS epochs_unknown
+FROM epochs_T
+
+UNION ALL
+
+SELECT
+    'in_bed_window' AS scope,
+    COUNT(*) AS epochs_total,
+    SUM(CASE WHEN stage_label IN ('N1','N2','N3','REM') THEN 1 ELSE 0 END) AS epochs_sleep,
+    SUM(CASE WHEN stage_label='W' THEN 1 ELSE 0 END) AS epochs_wake,
+    SUM(CASE WHEN stage_label='UNKNOWN' THEN 1 ELSE 0 END) AS epochs_unknown
+FROM v_in_bed_window;
+
+
+
+-- ================================================================================
+
 -- Q1) Basic join + aggregation: total sleep minutes per session (within sleep window)
 SELECT
   v.patients_code,
@@ -90,7 +170,7 @@ FROM v_sleep_summary;
 -- FROM v_sleep_summary;
 
 
--- Q5) Subquery and window: select only 
+-- Q6) Subquery and window: select only 
 
 -- SELECT
 --     patients_code,
@@ -125,7 +205,7 @@ FROM (
 WHERE ABS(N2_N3_pct_tst - mean_val) <= 2 * sd_val;
 
 
--- Q6) QC-style ranking: nights with most UNKNOWN in sleep window   
+-- Q7) QC-style ranking: nights with most UNKNOWN in sleep window   
 -- identify nights/sessions with potential data quality issues
 
 SELECT
@@ -140,7 +220,7 @@ FROM v_sleep_summary
 ORDER BY unknown_pct_window DESC;
 
 
--- Q7) Distribution check: epochs by stage across all included sessions (aggregation)   
+-- Q8) Distribution check: epochs by stage across all included sessions (aggregation)   
 SELECT
   stage_label,
   COUNT(*) AS n_epochs,
@@ -156,13 +236,13 @@ ORDER BY n_epochs DESC;
 -- =========================================
 -- Note: 1 epoch = 30s = 0.5 minutes
 
--- Q7) Stage transitions per night (fragmentation proxy)
+-- Q9) Stage transitions per night (fragmentation proxy)
 -- Counts how often the stage changes from one epoch to the next within the sleep window.
 
 WITH base AS (
   SELECT
-    v.patients_code,
     v.rec_id,
+    v.patients_code,
     v.epoch_idx,
     v.stage_label,
     LAG(v.stage_label) OVER (PARTITION BY v.rec_id ORDER BY v.epoch_idx) AS prev_stage
@@ -191,7 +271,6 @@ GROUP BY b.patients_code, b.rec_id, s.in_bed_window_h
 ORDER BY transitions_per_hour_window DESC;
 
 
-
     -- LAG() is a window function → looks at the previous row’s value.
     -- Helps calculate stage transitions per night as a proxy for fragmentation.
     -- Window functions work on ordered subsets (here, PARTITION BY session_id ORDER BY epoch_index).
@@ -199,167 +278,95 @@ ORDER BY transitions_per_hour_window DESC;
 
 
 
--- Q8) Number of awakenings (W bouts) within the sleep window + wake minutes (WASO proxy)
+-- Q10) Number of awakenings (W bouts) within the sleep window + wake minutes (WASO proxy)
 -- A "wake bout" starts when stage becomes W and the previous epoch was not W.
-WITH in_window AS (
-  SELECT es.*
-  FROM v_epoch_stage es
-  JOIN v_sleep_window w ON w.session_id = es.session_id
-  WHERE es.epoch_index BETWEEN w.first_sleep_epoch AND w.last_sleep_epoch
-),
-base AS (
+
+WITH base AS (
   SELECT
-    subject_code,
-    session_id,
-    psg_filename,
-    epoch_index,
-    stage,
-    LAG(stage) OVER (PARTITION BY session_id ORDER BY epoch_index) AS prev_stage
-  FROM in_window
+    rec_id,
+    patients_code,
+    epoch_idx,
+    stage_label,
+    LAG(in_bed.stage_label) OVER (PARTITION BY in_bed.rec_id ORDER BY in_bed.epoch_idx) AS prev_stage
+  FROM v_in_bed_window AS in_bed
 )
 SELECT
-  subject_code,
-  psg_filename,
-  ROUND(SUM(CASE WHEN stage='W' THEN 1 ELSE 0 END) * 30.0 / 60.0, 1) AS wake_in_window_min,
-  SUM(CASE WHEN stage='W' AND (prev_stage IS NULL OR prev_stage <> 'W') THEN 1 ELSE 0 END) AS n_awakenings,
+  b.patients_code,
+  b.rec_id,
+  v.wake_in_window_min,
+  SUM(
+    CASE WHEN b.stage_label='W' AND (b.prev_stage IS NULL OR b.prev_stage <> 'W') THEN 1 ELSE 0 END) AS n_awakenings,
   ROUND(
-    1.0 * SUM(CASE WHEN stage='W' AND (prev_stage IS NULL OR prev_stage <> 'W') THEN 1 ELSE 0 END)
-    / NULLIF((SELECT tst_h FROM v_night_sleep_summary ns WHERE ns.psg_filename = base.psg_filename), 0),
-    2
-  ) AS awakenings_per_hour_sleep
-FROM base
-GROUP BY subject_code, psg_filename
+    1.0 * SUM( CASE WHEN b.stage_label='W' AND (b.prev_stage IS NULL OR b.prev_stage <> 'W') THEN 1 ELSE 0 END)
+    / NULLIF(v.in_bed_window_h, 0), 2) AS awakenings_per_hour_sleep 
+FROM base b
+JOIN v_sleep_summary v ON v.rec_id = b.rec_id
+GROUP BY b.patients_code, b.rec_id, v.wake_in_window_min
 ORDER BY awakenings_per_hour_sleep DESC;
+
 
 -- Q9) Longest continuous bouts (N3, REM, and any sleep) within the sleep window
 -- Uses a classic window-function trick to label consecutive runs.
-WITH in_window AS (
-  SELECT es.*
-  FROM v_epoch_stage es
-  JOIN v_sleep_window w ON w.session_id = es.session_id
-  WHERE es.epoch_index BETWEEN w.first_sleep_epoch AND w.last_sleep_epoch
-),
-rn AS (
+
+WITH rn AS (
   SELECT
-    subject_code,
-    session_id,
-    psg_filename,
-    epoch_index,
-    stage,
-    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY epoch_index) AS rn_all,
-    ROW_NUMBER() OVER (PARTITION BY session_id, stage ORDER BY epoch_index) AS rn_stage
-  FROM in_window
+    rec_id,
+    patients_code,
+    epoch_idx,
+    stage_label,
+    ROW_NUMBER() OVER (PARTITION BY rec_id ORDER BY epoch_idx) AS rn_all,                 -- counts every epoch in order for the session (rec_id)
+    ROW_NUMBER() OVER (PARTITION BY rec_id, stage_label ORDER BY epoch_idx) AS rn_stage   -- counts epochs of the same stage separately
+  FROM v_in_bed_window 
 ),
 runs AS (
   SELECT
-    subject_code,
-    session_id,
-    psg_filename,
-    stage,
-    (rn_all - rn_stage) AS run_id,
-    COUNT(*) AS run_epochs
+    rec_id,
+    patients_code,
+    epoch_idx,
+    stage_label,
+    (rn_all - rn_stage) AS run_id,        -- rn_all - rn_stage is constant for consecutive same-stage epochs -→ identifies runs | NOTE: run_id is just a temporary identifier to separate consecutive blocks; it doesn’t matter if it’s 0, 2, 5, etc. What counts is that all epochs in the same run have the same run_id.
+    COUNT(*) AS run_epochs                -- number of epochs in this run
   FROM rn
-  GROUP BY subject_code, session_id, psg_filename, stage, run_id
+  GROUP BY rec_id, patients_code, stage_label, run_id
 )
 SELECT
-  subject_code,
-  psg_filename,
-  ROUND(COALESCE(MAX(CASE WHEN stage='N3'  THEN run_epochs END), 0) * 30.0 / 60.0, 1) AS longest_n3_min,
-  ROUND(COALESCE(MAX(CASE WHEN stage='REM' THEN run_epochs END), 0) * 30.0 / 60.0, 1) AS longest_rem_min,
-  ROUND(COALESCE(MAX(CASE WHEN stage IN ('N1','N2','N3','REM') THEN run_epochs END), 0) * 30.0 / 60.0, 1) AS longest_sleep_bout_min
+  rec_id,
+  patients_code,
+  ROUND(COALESCE(MAX(CASE WHEN stage_label='N3'  THEN run_epochs END), 0) * 30.0 / 60.0, 1) AS longest_n3_min,
+  ROUND(COALESCE(MAX(CASE WHEN stage_label='REM' THEN run_epochs END), 0) * 30.0 / 60.0, 1) AS longest_rem_min,
+  ROUND(COALESCE(MAX(CASE WHEN stage_label IN ('N1','N2','N3','REM') THEN run_epochs END), 0) * 30.0 / 60.0, 1) AS longest_sleep_bout_min
 FROM runs
-GROUP BY subject_code, psg_filename
+GROUP BY rec_id, patients_code
 ORDER BY longest_sleep_bout_min DESC;
 
--- Q10) (Optional) Show the first 40 epochs of the sleep window with prev stage (nice for debugging/demonstration)
--- Change 'SC4001' to any subject you like.
-WITH in_window AS (
-  SELECT es.*
-  FROM v_epoch_stage es
-  JOIN v_sleep_window w ON w.session_id = es.session_id
-  WHERE es.subject_code = 'SC4001'
-    AND es.epoch_index BETWEEN w.first_sleep_epoch AND w.last_sleep_epoch
-),
-base AS (
-  SELECT
-    subject_code,
-    psg_filename,
-    epoch_index,
-    stage,
-    LAG(stage) OVER (PARTITION BY psg_filename ORDER BY epoch_index) AS prev_stage
-  FROM in_window
-)
-SELECT *
-FROM base
-ORDER BY epoch_index
-LIMIT 40;
 
+-- Option 2: ????????????????????????
 
--- =========================================
--- Step 7.5: Data QA (LEFT JOIN / anti-join) + Performance
--- =========================================
-
--- Q11 – Q14 – Data QA / Anti-joins
-    -- Checks for missing links in data (e.g., epochs without a stage).
-    -- Anti-joins are very common in research and clinical data pipelines for consistency checks.
-
--- Q11) Anti-join: epochs without a sleep stage (should be 0)
 SELECT
-  COUNT(*) AS epochs_missing_stage
-FROM epochs e
-LEFT JOIN sleep_stages st ON st.epoch_id = e.epoch_id
-WHERE st.epoch_id IS NULL;
+    rec_id,
+    patients_code,
+    ROUND(COALESCE(MAX(CASE WHEN stage_label='N3'  THEN run_length END), 0) * 30.0 / 60.0, 1) AS longest_n3_min,
+    ROUND(COALESCE(MAX(CASE WHEN stage_label='REM' THEN run_length END), 0) * 30.0 / 60.0, 1) AS longest_rem_min,
+    ROUND(COALESCE(MAX(CASE WHEN stage_label IN ('N1','N2','N3','REM') THEN run_length END), 0) * 30.0 / 60.0, 1) AS longest_sleep_bout_min
+FROM (
+    SELECT
+        rec_id,
+        patients_code,
+        stage_label,
+        COUNT(*) OVER (PARTITION BY rec_id, stage_label, run_id) AS run_length
+    FROM (
+        SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY rec_id ORDER BY epoch_idx) 
+            - ROW_NUMBER() OVER (PARTITION BY rec_id, stage_label ORDER BY epoch_idx) AS run_id
+        FROM v_in_bed_window
+    ) t
+) x
+GROUP BY rec_id, patients_code
+ORDER BY longest_sleep_bout_min DESC;
 
--- Q12) Anti-join: sleep stages without an epoch (should be 0)
-SELECT
-  COUNT(*) AS stages_missing_epoch
-FROM sleep_stages st
-LEFT JOIN epochs e ON e.epoch_id = st.epoch_id
-WHERE e.epoch_id IS NULL;
 
--- Q13) Anti-join: sessions with no detected sleep window (no N1/N2/N3/REM)
-SELECT
-  p.subject_code,
-  s.psg_filename,
-  s.hyp_filename
-FROM sessions s
-JOIN participants p ON p.participant_id = s.participant_id
-LEFT JOIN v_sleep_window w ON w.session_id = s.session_id
-WHERE w.session_id IS NULL
-ORDER BY p.subject_code, s.psg_filename;
 
--- Q14) Anti-join: participants with no sessions (should be 0)
-SELECT
-  p.subject_code
-FROM participants p
-LEFT JOIN sessions s ON s.participant_id = p.participant_id
-WHERE s.session_id IS NULL
-ORDER BY p.subject_code;
 
--- Q15) Consistency check: per-session stage rows should equal epoch rows (should return 0 rows)
-SELECT
-  p.subject_code,
-  s.psg_filename,
-  COUNT(DISTINCT e.epoch_id) AS n_epochs,
-  COUNT(DISTINCT st.epoch_id) AS n_stage_rows
-FROM participants p
-JOIN sessions s ON s.participant_id = p.participant_id
-LEFT JOIN epochs e ON e.session_id = s.session_id
-LEFT JOIN sleep_stages st ON st.epoch_id = e.epoch_id
-GROUP BY p.subject_code, s.psg_filename
-HAVING n_epochs <> n_stage_rows
-ORDER BY p.subject_code;
-
--- Q16) Quick “dashboard” via UNION ALL (classic reporting pattern)
-SELECT 'participants' AS table_name, COUNT(*) AS n FROM participants
-UNION ALL
-SELECT 'sessions',     COUNT(*) FROM sessions
-UNION ALL
-SELECT 'epochs',       COUNT(*) FROM epochs
-UNION ALL
-SELECT 'sleep_stages', COUNT(*) FROM sleep_stages
-UNION ALL
-SELECT 'qc_flags',     COUNT(*) FROM qc_epoch_flags;
 
 -- -------------------------
 -- Performance / optimisation
@@ -368,14 +375,15 @@ SELECT 'qc_flags',     COUNT(*) FROM qc_epoch_flags;
 -- Q17) See how SQLite plans a typical analytic query (EXPLAIN QUERY PLAN)
 EXPLAIN QUERY PLAN
 SELECT
-  es.subject_code,
+  es.patients_code,
   es.psg_filename,
-  es.stage,
+  es.stage_label,
   COUNT(*) AS n_epochs
 FROM v_epoch_stage es
 JOIN v_sleep_window w ON w.session_id = es.session_id
 WHERE es.epoch_index BETWEEN w.first_sleep_epoch AND w.last_sleep_epoch
 GROUP BY es.subject_code, es.psg_filename, es.stage;
+
 
 -- Q18) Add a composite index that helps window-range queries (run once)
 -- This speeds up filters like: WHERE session_id = ? AND epoch_index BETWEEN a AND b

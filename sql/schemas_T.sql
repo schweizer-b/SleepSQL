@@ -67,9 +67,9 @@ CREATE TABLE epochs_T (
     UNIQUE (rec_id, epoch_idx)
 );
 
--- 4) NOTE Sleep stages (label per epoch) was incl in Epochs table
+-- NOTE Sleep stages (label per epoch) was incl in Epochs table
 
--- 5) Questionnaire answers
+-- 4) Questionnaire answers
 
 CREATE TABLE notes_T (
     rec_id  INTEGER PRIMARY KEY,
@@ -82,5 +82,12 @@ CREATE TABLE notes_T (
 );
 
 
---- INSERT VALUES + LINK TO EEG/fMRI + QUESTIONARRIES  !!!
---- Commit???????????
+---------------------------------------------------------------------------------
+
+-- Helpful indexes (speed up joins and aggregations)
+-- Example: filtering all N2 stages → idx_stages_stage helps SQLite find rows faster
+-- [table name](colunm)
+CREATE INDEX IF NOT EXISTS idx_sessions_participant ON sessions(participant_id);
+CREATE INDEX IF NOT EXISTS idx_epochs_session      ON epochs(session_id);
+CREATE INDEX IF NOT EXISTS idx_stages_stage        ON sleep_stages(stage);
+CREATE INDEX IF NOT EXISTS idx_qc_epoch            ON qc_epoch_flags(epoch_id);
