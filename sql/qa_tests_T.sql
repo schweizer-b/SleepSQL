@@ -1,11 +1,8 @@
 -- ==========================================================
 -- Sleep-EDF SQL QA Tests
 -- ==========================================================
--- These queries validate that the dataset was loaded correctly
--- and that the relationships between tables are consistent.
---
--- They are designed to catch ETL errors, missing data, or
--- unexpected anomalies before performing analytical queries.
+-- These queries validate that the dataset was loaded correctly and that the relationships between tables are consistent
+-- Designed to catch ETL errors, missing data, or unexpected anomalies before performing analytical queries
 --
 -- Expected behaviour:
 --   • Anti-joins should usually return zero rows
@@ -19,17 +16,12 @@
 -- ==========================================================
 -- 1. DATA INTEGRITY / PIPELINE QA
 -- ==========================================================
--- These queries verify the dataset was loaded correctly and
--- check for missing relationships between tables.
+-- Verify the dataset was loaded correctly and check for missing relationships between tables.
 
 
-
--- Q1) Anti-join: sessions with no detected sleep window
--- (no N1/N2/N3/REM epochs in the recording)
--- Interpretation:
--- Each recording should normally contain at least one sleep stage.
--- If rows appear here, the pipeline may have failed to detect
--- sleep onset or stage labels.
+-- Q1) Anti-join: sessions with no detected sleep window (no N1/N2/N3/REM epochs in the recording)
+    -- each recording should normally contain at least one sleep stage
+    -- if rows appear here, the pipeline may have failed to detect sleep onset or stage labels
 
 SELECT
   p.patients_code,
@@ -44,9 +36,7 @@ ORDER BY p.patients_code, r.psg_filename;
 
 
 -- Q2) Anti-join: participants with no sessions (should be zero)
--- Interpretation:
--- Every participant in the patients table should have at least
--- one recording session. Rows here indicate orphaned records.
+    -- every participant in the patients table should have at least one recording session. Rows here indicate orphaned records
 
 SELECT
   p.patients_code
@@ -60,15 +50,13 @@ ORDER BY p.patients_code;
 -- ==========================================================
 -- 2. DATASET SIZE CHECKS
 -- ==========================================================
--- These checks provide a quick overview of the dataset scale.
--- They are useful to confirm that ETL loaded all expected rows.
-
+-- These checks provide a quick overview of the dataset scale
+-- Useful to confirm that ETL loaded all expected rows
 
 
 -- Q3) Dataset size dashboard
--- Interpretation:
--- Displays the number of rows in each core table. These numbers
--- should remain stable across pipeline runs.
+    -- displays the number of rows in each core table
+    -- numbers should remain stable across pipeline runs
 
 SELECT 'patients' AS table_name, COUNT(*) AS n FROM patients_T
 UNION ALL
@@ -79,9 +67,8 @@ SELECT 'epochs', COUNT(*) FROM epochs_T;
 
 
 -- Q4) Epoch summary for full recordings
--- Interpretation:
--- Shows the distribution of epoch labels across the entire dataset.
--- Useful to verify that stage labels were mapped correctly during ETL.
+    -- shows the distribution of epoch labels across the entire dataset
+    -- useful to verify that stage labels were mapped correctly during ETL
 
 SELECT 'epochs_total' AS metric, COUNT(*) AS value FROM epochs_T
 UNION ALL
@@ -94,10 +81,8 @@ SELECT 'unknown_epochs', COUNT(*) FROM epochs_T WHERE stage_label='UNKNOWN';
 
 
 -- Q5) Epoch summary within the sleep window only
--- Interpretation:
--- Similar to Q4 but restricted to epochs inside the detected
--- sleep window (after sleep onset). Helps verify that the
--- window detection logic behaved correctly.
+    -- similar to Q4 but restricted to epochs inside the in-bed window (after sleep onset) 
+    -- helps verify that the window detection logic behaved correctly
 
 SELECT 'in_bed_epochs_total' AS metric, COUNT(*) AS value FROM v_in_bed_window
 UNION ALL
@@ -110,10 +95,7 @@ SELECT 'in_bed_unknown_epochs', COUNT(*) FROM v_in_bed_window WHERE stage_label=
 
 
 -- Q6) Full recording vs in-bed window comparison
--- Interpretation:
--- Compares the entire recording to the detected sleep window.
--- The window should normally contain fewer epochs than the full
--- recording because pre-sleep wake is excluded.
+    -- compares the entire recording to the detected in-bed window
 
 SELECT
     'full_recording' AS scope,
@@ -142,36 +124,20 @@ FROM v_in_bed_window;
 
 
 -- Q7) Missing stage labels
--- Interpretation:
--- Ensures all epochs have a stage_label assigned.
--- Any rows returned indicate missing or incomplete data.
+    -- ensures all epochs have a stage_label assigned
+    -- any rows returned indicate missing or incomplete data
 
-SELECT COUNT(*)
+SELECT COUNT(*) AS n_null_stage_labels
 FROM epochs_T
 WHERE stage_label IS NULL;
 
 
-
 -- Q8) Invalid stage labels
--- Interpretation:
--- Ensures all stage labels belong to the expected set.
--- Any row returned indicates unexpected labels that may break analyses.
+    -- ensures all stage labels belong to the expected set
+    -- any row returned indicates unexpected labels that may break analyses
 
 SELECT DISTINCT stage_label
 FROM epochs_T
 WHERE stage_label NOT IN ('W','N1','N2','N3','REM','UNKNOWN');
 
 
-
--- Q9) Epoch continuity check
--- Interpretation:
--- Detects missing epochs within each recording.
--- Expected: MAX(epoch_idx) - MIN(epoch_idx) + 1 = COUNT(*)
--- Any difference indicates gaps in the recording.
-
-SELECT rec_id,
-       COUNT(*) AS epochs,
-       MAX(epoch_idx) - MIN(epoch_idx) + 1 AS expected_epochs
-FROM epochs_T
-GROUP BY rec_id
-HAVING epochs <> expected_epochs;

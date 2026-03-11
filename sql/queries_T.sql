@@ -1,9 +1,8 @@
 -- ==========================================================
 -- Sleep-EDF SQL Analysis Queries
 -- ==========================================================
--- Ad-hoc queries used for exploratory analysis and QA. - temporary analysis queries used to explore data or answer a one-off question.
--- Ad-hoc means: created for a specific analysis purpose,
--- not part of the permanent/ETL pipeline.
+-- Ad-hoc queries used for exploratory analysis and QA -- temporary analysis queries used to explore data or answer a one-off question.
+-- (Ad-hoc = created for a specific analysis purpose, not part of the permanent/ETL pipeline)
 
 -- TABLE OF CONTENTS
     -- 1. Session-level sleep metrics
@@ -20,14 +19,10 @@
 -- 1. SESSION-LEVEL SLEEP ANALYSIS
 -- ==========================================================
 
-
-
 -- Q7) Total sleep minutes per session (within sleep window)
--- Interpretation:
--- Computes total sleep time per recording by counting epochs
--- labelled as sleep stages and converting them to minutes
--- (each epoch = 30 seconds). This is a basic estimate of
--- Total Sleep Time (TST) within the detected sleep window.
+    -- computes total sleep time per recording by counting epochs labelled as sleep stages and converting them to min
+    -- (each epoch = 30 s). This is a basic estimate of Total Sleep Time (TST) within the detected sleep window
+    -- NOTE: v_sleep_summary was not used for practising purposes
 
 SELECT
   v.patients_code,
@@ -42,10 +37,8 @@ ORDER BY v.patients_code, r.psg_filename;
 
 
 -- Q8) Stage minutes per session
--- Interpretation:
--- Computes the duration of each stage per session within the sleep window.
--- The ORDER BY CASE ensures stages are presented in physiological order:
--- W → N1 → N2 → N3 → REM → unknown.
+    -- computes the duration of each stage per recording within the sleep window
+    -- the ORDER BY CASE ensures stages are presented in physiological order: W → N1 → N2 → N3 → REM → unknown
 
 SELECT
   v.patients_code,
@@ -68,14 +61,12 @@ ORDER BY v.patients_code, r.psg_filename,
 
 
 -- Q9) Sleep summary view output
--- Interpretation:
--- Displays the core sleep metrics calculated in the summary view.
--- Each row corresponds to a recording and provides clinically
--- relevant indicators such as:
---   • Total Sleep Time (TST)
---   • Wake after sleep onset (WASO proxy)
---   • Sleep efficiency
---   • REM latency
+    -- displays the core sleep metrics calculated in the summary view.
+    -- each row corresponds to a recording and provides clinically relevant metrics such as:
+    --   • Total Sleep Time (TST)
+    --   • Wake after sleep onset (WASO proxy)
+    --   • Sleep efficiency
+    --   • REM latency
 
 SELECT
   patients_code, rec_code,
@@ -88,13 +79,11 @@ ORDER BY patients_code;
 
 
 -- Q10) Cohort filtering for analysis-ready nights
--- Interpretation:
--- Filters sessions that meet typical quality thresholds used
--- in sleep studies:
---   • at least 6 hours of sleep
---   • sleep efficiency ≥ 80%
---   • ≤ 5% unknown epochs
--- These criteria define "analysis-ready" nights.
+    -- filters recordings that meet typical quality thresholds:
+    --   • at least 6 hours of sleep
+    --   • sleep efficiency ≥ 80%
+    --   • ≤ 5% unknown epochs
+    -- these criteria define "analysis-ready" nights 
 
 SELECT *
 FROM v_sleep_summary
@@ -109,14 +98,9 @@ ORDER BY tst_h DESC;
 -- 2. COHORT STATISTICS & QUALITY CONTROL
 -- ==========================================================
 
-
-
 -- Q11) Compare each patient’s deep sleep percentage with cohort average
--- Interpretation:
--- Compares each recording's deep sleep percentage
--- (N2 + N3) against the overall cohort average.
--- The window function AVG() OVER () calculates the
--- cohort mean without collapsing rows.
+    -- compares each recording's deep sleep (N2 + N3) pct against the overall cohort average
+    -- the window function AVG() OVER () calculates the cohort mean without collapsing rows
 
 SELECT
    patients_code,
@@ -128,11 +112,11 @@ FROM v_sleep_summary;
 
 
 -- Q12) Detect statistical outliers (2 SD from mean)
--- Interpretation:
--- Identifies statistical outliers based on the
--- "two standard deviations from the mean" rule.
--- Sessions outside ±2 SD would normally be flagged
--- for further inspection in data quality control.
+    -- identifies statistical outliers based on the "two SD from the mean" rule
+    -- recordings outside ±2 SD would normally be flagged for further inspection in data quality control
+    -- NOTE: SQLite does not have a built-in STDDEV() function, like:
+    -- AVG(N2_N3_pct_tst) OVER () AS mean_val, -- STDDEV(N2_N3_pct_tst) OVER () AS sd_val
+
 
 SELECT *
 FROM (
@@ -147,20 +131,18 @@ FROM (
         ) AS sd_val
     FROM v_sleep_summary
 ) t
-WHERE ABS(N2_N3_pct_tst - mean_val) <= 2 * sd_val;
+WHERE ABS(N2_N3_pct_tst - mean_val) > 2 * sd_val;
 
 
 
 -- Q13) QC ranking: sessions with highest UNKNOWN percentage
--- Interpretation:
--- Categorises sessions based on unknown epoch proportion.
--- Helps quickly identify nights with potential data quality issues.
+    -- categorises recordings based on unknown epoch proportion
+    -- helps quickly identify nights with potential data quality issues
 
 SELECT
   patients_code,
   unknown_pct_window,
-  unknown_pct_window || '%' AS unknown_pct_label            -- concatenates the number with a percent sign
-
+  unknown_pct_window || '%' AS unknown_pct_label,      -- concatenates the number with a percent sign
   CASE
         WHEN unknown_pct_window <= 5 THEN 'OK'
         WHEN unknown_pct_window <= 20 THEN 'REVIEW'
@@ -172,11 +154,8 @@ ORDER BY unknown_pct_window DESC;
 
 
 -- Q14) Stage distribution across dataset
--- Interpretation:
--- Shows the distribution of sleep stages across the
--- entire dataset. The hours_total column converts
--- epoch counts into hours to give a more intuitive
--- sense of dataset composition.
+    -- shows the distribution of sleep stages across the entire dataset 
+    -- the hours_total column converts epoch counts into hours (more inituitive)
 
 SELECT
   stage_label,
@@ -192,13 +171,10 @@ ORDER BY n_epochs DESC;
 -- 3. ADVANCED TEMPORAL ANALYSIS (WINDOW FUNCTIONS)
 -- ==========================================================
 
-
-
 -- Q15) Stage transitions per night (sleep fragmentation proxy)
--- Interpretation:
--- Counts transitions between sleep stages across
--- consecutive epochs. Frequent transitions indicate
--- fragmented sleep architecture.
+    -- counts transitions between sleep stages across consecutive epochs 
+    -- normalise by sleep window - makes sessions comparable across nights of different length
+    -- too frequent transitions indicate fragmented sleep architecture
 
 WITH base AS (
   SELECT
@@ -223,7 +199,7 @@ SELECT
       CASE                                  
         WHEN b.prev_stage IS NOT NULL AND b.stage_label <> b.prev_stage THEN 1 ELSE 0
       END) / NULLIF(s.in_bed_window_h, 0), 2                    -- if = 0 --> return NULL
-  ) AS transitions_per_hour_window                              -- normalise by sleep window - makes sessions comparable across nights of different length
+  ) AS transitions_per_hour_window                              
 FROM base b
 JOIN v_sleep_summary s ON s.rec_id = b.rec_id
 GROUP BY b.patients_code, b.rec_id, s.in_bed_window_h
@@ -232,10 +208,8 @@ ORDER BY transitions_per_hour_window DESC;
 
 
 -- Q16) Number of awakenings within sleep window
--- Interpretation:
--- Detects awakenings by counting transitions
--- from any non-wake stage into W. This approximates
--- Wake After Sleep Onset (WASO) events.
+    -- detects awakenings by counting transitions from any non-wake stage into W. 
+    -- this approximates Wake After Sleep Onset (WASO) events
 
 WITH base AS (
   SELECT
@@ -267,10 +241,8 @@ ORDER BY awakenings_per_hour_sleep DESC;
 
 
 -- Q17) Longest continuous sleep bouts (N3, REM, and any sleep)
--- Interpretation:
--- Calculates the longest uninterrupted sleep bouts.
--- Long runs of N3 represent consolidated deep sleep,
--- while REM bouts indicate stable REM cycles.
+    -- calculates the longest uninterrupted sleep bouts (eg.., uninterrupted periods spent in a specific sleep stage)
+    -- long runs of N3 represent consolidated deep sleep, while REM bouts indicate stable REM cycles
 
 WITH rn AS (
   SELECT
@@ -307,7 +279,7 @@ ORDER BY longest_sleep_bout_min DESC;
 
 
 
--- Alternative implementation using pure window functions
+-- Alternative implementation using pure window functions (??)
 
 SELECT
     rec_id,
@@ -336,18 +308,14 @@ ORDER BY longest_sleep_bout_min DESC;
 -- ==========================================================
 -- 4. PERFORMANCE / QUERY OPTIMISATION
 -- ==========================================================
--- These queries demonstrate how SQLite executes analytical
--- queries and how indexes improve performance.
-
-
-
--- ----------------------------------------------------------
--- Q6.1 Inspect the query plan of a typical analytical query
--- ----------------------------------------------------------
--- EXPLAIN QUERY PLAN shows how SQLite will execute a query.
+-- These queries demonstrate how SQLite executes analytical queries and how indexes improve performance
 -- Look for:
---   SCAN  → full table scan (slow)
---   SEARCH → index lookup (faster)
+    -- SCAN  → full table scan (slow)
+    -- SEARCH → index lookup (faster)
+
+
+-- Q18) Inspect the query plan of a typical analytical query
+-- EXPLAIN QUERY PLAN - shows how SQLite will execute a query
 
 EXPLAIN QUERY PLAN
 SELECT
@@ -357,10 +325,7 @@ FROM epochs_T
 GROUP BY stage_label;
 
 
-
--- ----------------------------------------------------------
--- Q6.2 Example: query plan for window-function query
--- ----------------------------------------------------------
+-- Q19) Example: query plan for window-function query
 
 EXPLAIN QUERY PLAN
 SELECT
@@ -371,23 +336,17 @@ SELECT
 FROM epochs_T;
 
 
-
--- ----------------------------------------------------------
--- Q6.3 Create a composite index for window queries
--- ----------------------------------------------------------
--- This index helps queries that:
---   PARTITION BY rec_id
---   ORDER BY epoch_idx
+-- Q19.2) Create a index for window queries
+     -- This index helps queries that:
+        -- PARTITION BY rec_id
+        -- ORDER BY epoch_idx
 
 CREATE INDEX IF NOT EXISTS idx_epochs_rec_epoch_perf
 ON epochs_T(rec_id, epoch_idx);
 
 
-
--- ----------------------------------------------------------
--- Q6.4 Re-run query plan after index creation
--- ----------------------------------------------------------
--- Compare the output with Q6.2.
+-- Q19.3) Re-run query plan after index creation
+       -- Compare the output with Q19.1.
 
 EXPLAIN QUERY PLAN
 SELECT

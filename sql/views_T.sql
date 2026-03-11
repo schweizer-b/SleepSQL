@@ -47,20 +47,12 @@ DROP VIEW IF EXISTS v_sleep_summary;
 -- ==========================================================
 -- 1) SESSION NOTES / OBSERVATIONS
 -- ==========================================================
--- Combines contextual observations recorded for each
--- sleep session (e.g. caffeine intake, alcohol, stress).
---
+-- Includes obs from the questionnaire recorded for each sleep recording (e.g. caffeine intake, alcohol, stress)
 -- Two derived fields are created:
+--   has_obs: boolean indicator (0/1) showing whether any positve response
+--   obs_count: number of positive responses
 --
---   has_obs
---     Boolean indicator (0/1) showing whether any
---     observation occurred during the session.
---
---   obs_count
---     Number of positive observations.
---
--- These variables may later be used for cohort comparisons
--- or exploratory analyses.
+-- These variables may later be used for cohort comparisons or exploratory analyses
 
 DROP VIEW IF EXISTS v_notes;
 
@@ -72,36 +64,32 @@ SELECT
     has_pain,
     sleep_deprived,
     stress,   
-    CASE            -- Boolean version (0 or 1)
+    -- Boolean version (0 or 1)
+    CASE            
         WHEN (had_coffee + had_alcohol + has_pain + sleep_deprived + stress) > 0 
         THEN 1
         ELSE 0
     END AS has_obs,
-
-    (had_coffee + had_alcohol + has_pain + sleep_deprived + stress)  -- Count of positive answers
+     -- Count of positive answers
+    (had_coffee + had_alcohol + has_pain + sleep_deprived + stress) 
     AS obs_count
 FROM notes_T;
 
--- NB: ❌ You cannot use SUM() directly inside the same row like that.
--- ✅ You can use SUM() when aggregating across rows.
+-- NB: ❌ SUM() cannot be used directly inside the same row like that
+-- ✅ only use SUM() when aggregating across rows
 
 
 
 -- ==========================================================
 -- 2) SLEEP BOUNDARIES PER SESSION
 -- ==========================================================
--- Determines the first and last sleep epochs within
--- each recording.
+-- Determines the first and last sleep epochs within each recording to define the sleep window used in most downstream analyses
 --
 -- first_sleep_epoch
---     first epoch that is not Wake/Unknown
---     (i.e. N1/N2/N3/REM)
---
+--     first epoch that is not Wake/Unknown (i.e. N1/N2/N3/REM)
 -- last_sleep_epoch
 --     last epoch that is not Wake/Unknown
---
--- These boundaries define the sleep window used in most
--- downstream analyses.
+
 
 DROP VIEW IF EXISTS v_sleep_boundaries;
 
@@ -120,7 +108,7 @@ SELECT
     p.patients_code,
     r.rec_code,
     COALESCE(v.has_obs, 0) AS has_obs,             -- if v.has_obs is not NULL → return it. if v.has_obs is NULL → return 0
-    COALESCE(v.obs_count, 0) AS obs_count,         -- NB: maybe not incl in a real case
+    COALESCE(v.obs_count, 0) AS obs_count,         
     ROUND((se.last_sleep_epoch - se.first_sleep_epoch + 1) * 30.0 / 60.0, 1) AS sleep_window_min,
     se.first_sleep_epoch,
     se.last_sleep_epoch
@@ -129,28 +117,16 @@ JOIN patients_T p ON p.patients_id = r.patients_id
 LEFT JOIN v_notes v ON v.rec_id = r.rec_id
 JOIN sleep_epochs se ON se.rec_id = r.rec_id;
 
+-- NOTE: maybe COALESCE should not be used in a real case as no answer/NULL is different than a negative/0 for analyses(?)
 
 
 -- ==========================================================
 -- 3) IN-BED WINDOW (WINDOWED EPOCHS VIEW)
 -- ==========================================================
--- Extracts only epochs that fall within the sleep window
--- defined above.
---
--- Each row corresponds to one 30-second epoch within
--- the detected sleep window of a recording.
+-- Extracts only epochs that fall within the sleep window boudaries defined above
+-- Each row corresponds to one 30s epoch within the detected sleep window of a recording
 --
 -- This dataset is used to compute most sleep metrics.
-
--- Alternative minimal implementation (kept for reference):
---
--- DROP VIEW IF EXISTS v_in_bed_window;
--- CREATE VIEW v_in_bed_window AS
--- SELECT
---     e.*
--- FROM epochs_T e
--- JOIN v_sleep_boundaries sb ON sb.rec_id = e.rec_id
--- WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
 
 DROP VIEW IF EXISTS v_in_bed_window;
 
@@ -168,16 +144,21 @@ FROM v_sleep_boundaries sb
 JOIN epochs_T e ON e.rec_id = sb.rec_id
 WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
 
+-- Alternative minimal implementation (kept for ref.):
+--
+-- DROP VIEW IF EXISTS v_in_bed_window;
+-- CREATE VIEW v_in_bed_window AS
+-- SELECT
+--     e.*
+-- FROM epochs_T e
+-- JOIN v_sleep_boundaries sb ON sb.rec_id = e.rec_id
+-- WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
 
 
 -- ==========================================================
 -- 4) NIGHTLY SLEEP SUMMARY (MAIN ANALYTICAL VIEW)
 -- ==========================================================
--- Produces one row per recording/session with key sleep
--- metrics.
---
--- This is the main analytical view used in most queries
--- and dashboards.
+-- Produces one row per recording/session with key sleep metrics
 --
 -- Metrics include:
 --   • sleep window duration
@@ -191,7 +172,7 @@ WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
 
 DROP VIEW IF EXISTS v_sleep_summary;
 
-CREATE MATERIALISED VIEW v_sleep_summary AS
+CREATE VIEW v_sleep_summary AS
 WITH w AS (
     SELECT * FROM v_in_bed_window
 ),
@@ -251,7 +232,7 @@ SELECT
 -- Latencies (minutes)
     ROUND(first_sleep_epoch * 30.0 / 60.0, 1) AS sleep_onset_min_from_recording_start,
   CASE
-    WHEN first_rem_epoch IS NULL THEN NULL                                  -- Prevents calculating REM latency on missing data. NB: if first_rem_epoch is NULL, the whole expression would return NULL anyway in SQLite, this is more 
-    ELSE ROUND((first_rem_epoch - first_sleep_epoch) * 30.0 / 60.0, 1)          
+    WHEN first_rem_epoch IS NULL THEN NULL                                  -- Prevents calculating REM latency on missing data 
+    ELSE ROUND((first_rem_epoch - first_sleep_epoch) * 30.0 / 60.0, 1)      -- NB: if first_rem_epoch is NULL, the whole expression would return NULL anyway in SQLite, this is more 
   END AS rem_latency_min
 FROM counts;

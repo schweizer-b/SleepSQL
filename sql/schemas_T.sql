@@ -2,49 +2,48 @@
 -- Sleep-EDF Database Schema
 -- ==========================================================
 -- Purpose:
--- Defines the relational database structure used in the
--- Sleep-EDF project.
---
--- The schema acts as a blueprint:
+    -- Defines the relational database structure used in the Sleep-EDF project
+
+-- The schema acts as a structure/blueprint:
 --   • Tables
 --   • Columns
 --   • Relationships
---
+
 -- Hierarchy:
--- patients_T → recordings_T → epochs_T
--- recordings_T → notes_T
---
+    -- patients_T → recordings_T → epochs_T
+    -- recordings_T → notes_T
+
 -- Run with:
 -- sqlite3 data_out/sleepedf_T.db ".read sql/schemas_T.sql"
 -- ==========================================================
 
 
 -- ==========================================================
--- 0) SQLite Configuration
+-- 0) SQLite config step
 -- ==========================================================
-PRAGMA foreign_keys = ON; -- Ensure relational integrity (FKs enforced)
+PRAGMA foreign_keys = ON;       -- ensure FKs are enforced
 
 
 -- ==========================================================
--- 1) Reset tables (safe re-run)
+-- 1) Reset tables (when re-running)
 -- ==========================================================
--- Temporarily disable FK checks to drop tables in any order
-PRAGMA foreign_keys = OFF;
+
+PRAGMA foreign_keys = OFF;      -- temporarily disable FK checks to drop tables in any order
 
 DROP TABLE IF EXISTS notes_T;
 DROP TABLE IF EXISTS epochs_T;
 DROP TABLE IF EXISTS recordings_T;
 DROP TABLE IF EXISTS patients_T;
 
-PRAGMA foreign_keys = ON;  -- Re-enable FK checks
+PRAGMA foreign_keys = ON;       -- re-enable FK checks
 
 
 
 -- ==========================================================
 -- 2) Patients Table
 -- ==========================================================
--- Each row = one participant
--- patients_code: human-readable ID
+-- Each row = one participant/patient
+-- patients_code: assigned ID eg., SC4001
 -- age, sex, bmi: constrained for realistic values
 
 CREATE TABLE patients_T (                                 
@@ -60,10 +59,10 @@ CREATE TABLE patients_T (
 -- ==========================================================
 -- 3) Recordings Table
 -- ==========================================================
--- Each row = one sleep session / night
--- patients_id → recordings (1:N)
--- UNIQUE(patients_id, rec_code) ensures no duplicate session codes
--- ON DELETE CASCADE: deleting a patient removes recordings
+-- Each row = one sleep session / night / recording
+-- patients_id -→ recordings (1:N) 
+-- UNIQUE(patients_id, rec_code) ensures no duplicate recording codes eg., E0
+-- ON DELETE CASCADE: deleting a patient removes their recordings
 
 CREATE TABLE recordings_T (
     rec_id INTEGER PRIMARY KEY,
@@ -82,9 +81,9 @@ CREATE TABLE recordings_T (
 -- ==========================================================
 -- 4) Epochs Table
 -- ==========================================================
--- Each row = one 30-second epoch within a recording
+-- Each row = one 30s epoch within a recording
 -- stage_label = sleep stage classification
--- epoch_idx = sequential number within recording
+-- epoch_idx = sequential number of epochs within recording
 
 CREATE TABLE epochs_T (
     epochs_id INTEGER PRIMARY KEY,
@@ -97,16 +96,13 @@ CREATE TABLE epochs_T (
     UNIQUE (rec_id, epoch_idx)
 );
 
--- NOTE: Sleep stages are included directly in epochs_T
-
-
 
 -- ==========================================================
 -- 5) Notes / Questionnaire Table
 -- ==========================================================
--- Each row = context information for one recording
--- Boolean variables stored as 0/1
--- Can be used to flag sessions with observations
+-- Each row = context information / questionnaire answers for one recording
+-- Boolean variables stored as 0/1 for no/yes
+-- Can be used to flag sessions w observations
 
 CREATE TABLE notes_T (
     rec_id  INTEGER PRIMARY KEY,
