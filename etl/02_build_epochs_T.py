@@ -85,19 +85,19 @@ def build_epoch_labels(duration_sec: int, ann: list[tuple[float, float, str]]) -
 
 def main() -> None:
     root = project_root()
-    db_path = root / "data_out" / "sleepedf_T.db"
+    db_path = root / "data_out" / "sleepedf_test.db"
     data_raw = root / "data_raw"
 
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON;")
     cur = conn.cursor()
 
-    cur.execute("SELECT rec_id, hyp_filename FROM recordings_T ORDER BY rec_id;")
+    cur.execute("SELECT rec_id, hyp_filename FROM recordings ORDER BY rec_id;")
     recs = cur.fetchall()
     if not recs:
-        raise RuntimeError("No recordings found. Run etl/01_extract_sleepedf_T.py first.")
+        raise RuntimeError("No recordings found. Run etl/01_extract_sleepedf_test.py first.")
 
-    for rec_id, hyp_fn in tqdm(recs, desc="Building epochs_T"):
+    for rec_id, hyp_fn in tqdm(recs, desc="Building epochs"):
         hyp_path = data_raw / hyp_fn
         if not hyp_path.exists():
             print(f"⚠️ Missing hyp file: {hyp_path}")
@@ -112,7 +112,7 @@ def main() -> None:
         labels = build_epoch_labels(span, ann)
 
         # rerun-safe
-        cur.execute("DELETE FROM epochs_T WHERE rec_id=?", (rec_id,))
+        cur.execute("DELETE FROM epochs WHERE rec_id=?", (rec_id,))
 
         rows = [
             (rec_id, i, i * EPOCH_LEN_SEC, EPOCH_LEN_SEC, labels[i])
@@ -120,7 +120,7 @@ def main() -> None:
         ]
         cur.executemany(
             """
-            INSERT INTO epochs_T(rec_id, epoch_idx, start_sec, duration_sec, stage_label)
+            INSERT INTO epochs(rec_id, epoch_idx, start_sec, duration_sec, stage_label)
             VALUES (?, ?, ?, ?, ?)
             """,
             rows,

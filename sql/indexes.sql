@@ -5,7 +5,7 @@
 -- functions used in queries.sql.
 --
 -- Run once after the database is built:
--- sqlite3 data_out/sleepedf_T.db ".read sql/indexes.sql"
+-- sqlite3 data_out/sleepedf.db ".read sql/indexes.sql"
 
 
 
@@ -15,12 +15,12 @@
 
 -- recordings → patients join
 CREATE INDEX IF NOT EXISTS idx_recordings_patient
-ON recordings_T(patients_id);
+ON recordings(patients_id);
 
 
 -- epochs → recordings join
 CREATE INDEX IF NOT EXISTS idx_epochs_rec
-ON epochs_T(rec_id);
+ON epochs(rec_id);
 
 
 
@@ -34,7 +34,7 @@ ON epochs_T(rec_id);
 -- already grouped and ordered.
 
 CREATE INDEX IF NOT EXISTS idx_epochs_rec_epoch
-ON epochs_T(rec_id, epoch_idx);
+ON epochs(rec_id, epoch_idx);
 
 
 
@@ -44,7 +44,7 @@ ON epochs_T(rec_id, epoch_idx);
 -- Helps stage distribution queries and QC checks.
 
 CREATE INDEX IF NOT EXISTS idx_epochs_stage
-ON epochs_T(stage_label);
+ON epochs(stage_label);
 
 
 

@@ -10,11 +10,11 @@
 --   • Relationships
 
 -- Hierarchy:
-    -- patients_T → recordings_T → epochs_T
-    -- recordings_T → notes_T
+    -- patients → recordings → epochs
+    -- recordings → notes
 
 -- Run with:
--- sqlite3 data_out/sleepedf_T.db ".read sql/schemas_T.sql"
+-- sqlite3 data_out/sleepedf_test.db ".read sql/schemas.sql"
 -- ==========================================================
 
 
@@ -46,7 +46,7 @@ PRAGMA foreign_keys = ON;       -- re-enable FK checks
 -- patients_code: assigned ID eg., SC4001
 -- age, sex, bmi: constrained for realistic values
 
-CREATE TABLE patients_T (                                 
+CREATE TABLE patients (                                 
     patients_id INTEGER PRIMARY KEY,                    
     patients_code VARCHAR(8) NOT NULL UNIQUE,
     age INT CHECK (age BETWEEN 17 AND 100),             
@@ -64,7 +64,7 @@ CREATE TABLE patients_T (
 -- UNIQUE(patients_id, rec_code) ensures no duplicate recording codes eg., E0
 -- ON DELETE CASCADE: deleting a patient removes their recordings
 
-CREATE TABLE recordings_T (
+CREATE TABLE recordings (
     rec_id INTEGER PRIMARY KEY,
     patients_id INT NOT NULL,
     rec_code VARCHAR(3) NOT NULL,
@@ -72,7 +72,7 @@ CREATE TABLE recordings_T (
     hyp_filename VARCHAR(30) NOT NULL,
     rec_date TEXT NOT NULL,        -- could be DATE in other RDBMS
     rec_log TEXT,                  -- optional notes
-    FOREIGN KEY (patients_id) REFERENCES patients_T(patients_id) ON DELETE CASCADE,
+    FOREIGN KEY (patients_id) REFERENCES patients(patients_id) ON DELETE CASCADE,
     UNIQUE (patients_id, rec_code)
 );
 
@@ -85,14 +85,14 @@ CREATE TABLE recordings_T (
 -- stage_label = sleep stage classification
 -- epoch_idx = sequential number of epochs within recording
 
-CREATE TABLE epochs_T (
+CREATE TABLE epochs (
     epochs_id INTEGER PRIMARY KEY,
     rec_id INT NOT NULL,
     epoch_idx INT CHECK (epoch_idx >= 0) NOT NULL,
     start_sec INT CHECK (start_sec >= 0) NOT NULL,
     duration_sec INT NOT NULL DEFAULT 30,
     stage_label TEXT NOT NULL CHECK (stage_label IN ('W','N1','N2','N3','REM','UNKNOWN')),
-    FOREIGN KEY (rec_id) REFERENCES recordings_T(rec_id) ON DELETE CASCADE,
+    FOREIGN KEY (rec_id) REFERENCES recordings(rec_id) ON DELETE CASCADE,
     UNIQUE (rec_id, epoch_idx)
 );
 
@@ -104,14 +104,14 @@ CREATE TABLE epochs_T (
 -- Boolean variables stored as 0/1 for no/yes
 -- Can be used to flag sessions w observations
 
-CREATE TABLE notes_T (
+CREATE TABLE notes (
     rec_id  INTEGER PRIMARY KEY,
     had_coffee INT NOT NULL CHECK (had_coffee IN (0,1)),             
     had_alcohol INT NOT NULL CHECK (had_alcohol IN (0,1)),           
     has_pain INT NOT NULL CHECK (has_pain IN (0,1)),                 
     sleep_deprived INT NOT NULL CHECK (sleep_deprived IN (0,1)),     
     stress INT NOT NULL CHECK (stress IN (0,1)),                     
-    FOREIGN KEY (rec_id) REFERENCES recordings_T(rec_id) ON DELETE CASCADE
+    FOREIGN KEY (rec_id) REFERENCES recordings(rec_id) ON DELETE CASCADE
 );
 
 

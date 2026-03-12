@@ -99,10 +99,10 @@ def find_pairs(data_raw: Path) -> tuple[list[FilePair], list[str]]:
 
 def upsert_patient(cur: sqlite3.Cursor, patients_code: str) -> int:
     cur.execute(
-        "INSERT OR IGNORE INTO patients_T(patients_code) VALUES (?)",
+        "INSERT OR IGNORE INTO patients(patients_code) VALUES (?)",
         (patients_code,),
     )
-    cur.execute("SELECT patients_id FROM patients_T WHERE patients_code=?", (patients_code,))
+    cur.execute("SELECT patients_id FROM patients WHERE patients_code=?", (patients_code,))
     row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"Could not get patients_id for {patients_code}")
@@ -120,7 +120,7 @@ def upsert_recording(
 ) -> int:
     # stable upsert (avoid OR REPLACE changing rec_id)
     cur.execute(
-        "SELECT rec_id FROM recordings_T WHERE patients_id=? AND rec_code=?",
+        "SELECT rec_id FROM recordings WHERE patients_id=? AND rec_code=?",
         (patients_id, rec_code),
     )
     row = cur.fetchone()
@@ -128,7 +128,7 @@ def upsert_recording(
         rec_id = int(row[0])
         cur.execute(
             """
-            UPDATE recordings_T
+            UPDATE recordings
             SET psg_filename=?, hyp_filename=?, rec_date=?, rec_log=?
             WHERE rec_id=?
             """,
@@ -138,7 +138,7 @@ def upsert_recording(
 
     cur.execute(
         """
-        INSERT INTO recordings_T(patients_id, rec_code, psg_filename, hyp_filename, rec_date, rec_log)
+        INSERT INTO recordings(patients_id, rec_code, psg_filename, hyp_filename, rec_date, rec_log)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (patients_id, rec_code, psg_filename, hyp_filename, rec_date, rec_log),
@@ -150,7 +150,7 @@ def ensure_notes_row(cur: sqlite3.Cursor, rec_id: int) -> None:
     # placeholder zeros; later the seed script can overwrite
     cur.execute(
         """
-        INSERT OR IGNORE INTO notes_T(rec_id, had_coffee, had_alcohol, has_pain, sleep_deprived, stress)
+        INSERT OR IGNORE INTO notes(rec_id, had_coffee, had_alcohol, has_pain, sleep_deprived, stress)
         VALUES (?, 0, 0, 0, 0, 0)
         """,
         (rec_id,),
@@ -160,7 +160,7 @@ def ensure_notes_row(cur: sqlite3.Cursor, rec_id: int) -> None:
 def main() -> None:
     root = project_root()
     data_raw = root / "data_raw"
-    db_path = root / "data_out" / "sleepedf_T.db"
+    db_path = root / "data_out" / "sleepedf_test.db"
 
     pairs, warnings = find_pairs(data_raw)
     print(f"Found {len(pairs)} PSG↔Hypnogram pairs.")

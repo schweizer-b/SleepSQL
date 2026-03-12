@@ -1,126 +1,238 @@
+-- ==========================================================
+-- Sleep-EDF Derived Views
+-- ==========================================================
+-- This file defines analytical views used to progressively
+-- transform raw sleep staging data into analysis-ready metrics.
+--
+-- View pipeline:
+--
+-- notes
+--   ↓
+-- v_notes
+--   ↓
+-- v_sleep_boundaries
+--   ↓
+-- v_in_bed_window
+--   ↓
+-- v_sleep_summary  (main analytical view)
+--
+-- Each layer adds structure and derived metrics that simplify
+-- downstream SQL analysis queries.
+--
 -- Run with:
--- sqlite3 data_out/sleepedf.db ".read sql/views.sql"
+-- sqlite3 data_out/sleepedf_test.db ".read sql/views.sql"
+-- ==========================================================
 
-PRAGMA foreign_keys = ON;                                        -- SQLite disables FK enforcement by default.
 
--- 1) Convenience view: one row per epoch with participant + session info
-DROP VIEW IF EXISTS v_epoch_stage;                               -- If it exists → delete it. Prevents errors when re-running.
-CREATE VIEW v_epoch_stage AS                                     --- A VIEW is: A saved query. It does NOT store data. It stores SQL logic.
-SELECT                                                           -- This creates: One row per epoch, with participant + session + stage info attached.     
-  p.subject_code,
-  s.session_id,
-  s.session_code,
-  s.psg_filename,
-  e.epoch_id,
-  e.epoch_index,
-  e.start_sec,
-  e.duration_sec,
-  st.stage
-FROM participants p       --?????                               -- This connects: participants → sessions → epochs → sleep_stages 
-JOIN sessions s     ON s.participant_id = p.participant_id      -- Result: One big flat table. Very analytics-friendly.
-JOIN epochs e       ON e.session_id = s.session_id
-JOIN sleep_stages st ON st.epoch_id = e.epoch_id;
+PRAGMA foreign_keys = ON;                                        -- SQLite disables FK enforcement by default
 
--- 2) Sleep window per session:
--- first_sleep_epoch = first epoch that is not Wake/Unknown (i.e., N1/N2/N3/REM)
--- last_sleep_epoch  = last epoch that is not Wake/Unknown
+
+
+-- ==========================================================
+-- CLEANUP PREVIOUS VIEWS
+-- ==========================================================
+-- Dropping views ensures the script can be re-run safely.
+
+DROP VIEW IF EXISTS v_epoch_stage;
 DROP VIEW IF EXISTS v_sleep_window;
-CREATE VIEW v_sleep_window AS
-WITH sleep_epochs AS (                             -- CTE (WITH clause) This creates a temporary mini-table  NB: this ❌ is invalid: WITH w AS v_sleep_window   since CTE is not aliasing an existing table
-  SELECT                                                                                                      -- “w” is the result of this SELECT statement.
-    session_id,
-    MIN(epoch_index) AS first_sleep_epoch,
-    MAX(epoch_index) AS last_sleep_epoch
-  FROM v_epoch_stage
-  WHERE stage IN ('N1','N2','N3','REM')
-  GROUP BY session_id
+DROP VIEW IF EXISTS v_night_sleep_summary;
+
+DROP VIEW IF EXISTS v_notes;
+DROP VIEW IF EXISTS v_sleep_boundaries;
+DROP VIEW IF EXISTS v_in_bed_window;
+DROP VIEW IF EXISTS v_sleep_summary;
+
+
+
+-- ==========================================================
+-- 1) SESSION NOTES / OBSERVATIONS
+-- ==========================================================
+-- Includes obs from the questionnaire recorded for each sleep recording (e.g. caffeine intake, alcohol, stress)
+-- Two derived fields are created:
+--   has_obs: boolean indicator (0/1) showing whether any positve response
+--   obs_count: number of positive responses
+--
+-- These variables may later be used for cohort comparisons or exploratory analyses
+
+DROP VIEW IF EXISTS v_notes;
+
+CREATE VIEW v_notes AS 
+SELECT
+    rec_id,
+    had_coffee,
+    had_alcohol,
+    has_pain,
+    sleep_deprived,
+    stress,   
+    -- Boolean version (0 or 1)
+    CASE            
+        WHEN (had_coffee + had_alcohol + has_pain + sleep_deprived + stress) > 0 
+        THEN 1
+        ELSE 0
+    END AS has_obs,
+     -- Count of positive answers
+    (had_coffee + had_alcohol + has_pain + sleep_deprived + stress) 
+    AS obs_count
+FROM notes;
+
+-- NB: ❌ SUM() cannot be used directly inside the same row like that
+-- ✅ only use SUM() when aggregating across rows
+
+
+
+-- ==========================================================
+-- 2) SLEEP BOUNDARIES PER SESSION
+-- ==========================================================
+-- Determines the first and last sleep epochs within each recording to define the sleep window used in most downstream analyses
+--
+-- first_sleep_epoch
+--     first epoch that is not Wake/Unknown (i.e. N1/N2/N3/REM)
+-- last_sleep_epoch
+--     last epoch that is not Wake/Unknown
+
+
+DROP VIEW IF EXISTS v_sleep_boundaries;
+
+CREATE VIEW v_sleep_boundaries AS
+WITH sleep_epochs AS (
+    SELECT
+        rec_id,
+        MIN(epoch_idx) AS first_sleep_epoch,
+        MAX(epoch_idx) AS last_sleep_epoch
+    FROM epochs
+    WHERE stage_label IN ('N1','N2','N3','REM')
+    GROUP BY rec_id
 )
 SELECT
-  s.session_id,
-  s.psg_filename,
-  s.session_code,
-  p.subject_code,
-  se.first_sleep_epoch,
-  se.last_sleep_epoch,
-  -- window length in minutes
-  ROUND((se.last_sleep_epoch - se.first_sleep_epoch + 1) * 30.0 / 60.0, 1) AS sleep_window_min    -- Remember +1 !!
-FROM sessions s
-JOIN participants p ON p.participant_id = s.participant_id
-JOIN sleep_epochs se ON se.session_id = s.session_id;
+    r.rec_id,
+    p.patients_code,
+    r.rec_code,
+    COALESCE(v.has_obs, 0) AS has_obs,             -- if v.has_obs is not NULL → return it. if v.has_obs is NULL → return 0
+    COALESCE(v.obs_count, 0) AS obs_count,         
+    ROUND((se.last_sleep_epoch - se.first_sleep_epoch + 1) * 30.0 / 60.0, 1) AS sleep_window_min,
+    se.first_sleep_epoch,
+    se.last_sleep_epoch
+FROM recordings r
+JOIN patients p ON p.patients_id = r.patients_id 
+LEFT JOIN v_notes v ON v.rec_id = r.rec_id
+JOIN sleep_epochs se ON se.rec_id = r.rec_id;
+
+-- NOTE: maybe COALESCE should not be used in a real case as no answer/NULL is different than a negative/0 for analyses(?)
 
 
+-- ==========================================================
+-- 3) IN-BED WINDOW (WINDOWED EPOCHS VIEW)
+-- ==========================================================
+-- Extracts only epochs that fall within the sleep window boudaries defined above
+-- Each row corresponds to one 30s epoch within the detected sleep window of a recording
+--
+-- This dataset is used to compute most sleep metrics.
 
--- 3) Nightly summary (main “portfolio” view) ---- total time of each stage??????????
--- One row per night (per session) with all sleep metrics calculated
-DROP VIEW IF EXISTS v_night_sleep_summary;
-CREATE VIEW v_night_sleep_summary AS
+DROP VIEW IF EXISTS v_in_bed_window;
+
+CREATE VIEW v_in_bed_window AS
+SELECT
+    sb.rec_id,
+    sb.patients_code,
+    sb.rec_code,
+    sb.has_obs,
+    sb.first_sleep_epoch,
+    sb.sleep_window_min, 
+    e.epoch_idx,
+    e.stage_label
+FROM v_sleep_boundaries sb
+JOIN epochs e ON e.rec_id = sb.rec_id
+WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
+
+-- Alternative minimal implementation (kept for ref.):
+--
+-- DROP VIEW IF EXISTS v_in_bed_window;
+-- CREATE VIEW v_in_bed_window AS
+-- SELECT
+--     e.*
+-- FROM epochs e
+-- JOIN v_sleep_boundaries sb ON sb.rec_id = e.rec_id
+-- WHERE e.epoch_idx BETWEEN sb.first_sleep_epoch AND sb.last_sleep_epoch;
+
+
+-- ==========================================================
+-- 4) NIGHTLY SLEEP SUMMARY (MAIN ANALYTICAL VIEW)
+-- ==========================================================
+-- Produces one row per recording/session with key sleep metrics
+--
+-- Metrics include:
+--   • sleep window duration
+--   • total sleep time (TST)
+--   • wake after sleep onset (WASO proxy)
+--   • stage durations
+--   • stage percentages
+--   • sleep efficiency
+--   • sleep onset latency
+--   • REM latency
+
+DROP VIEW IF EXISTS v_sleep_summary;
+
+CREATE VIEW v_sleep_summary AS
 WITH w AS (
-  SELECT * FROM v_sleep_window                             -- STEP 1 — w (sleep window): Shorter name - It contains: session_id first_sleep_epoch last_sleep_epoch sleep_window_min
+    SELECT * FROM v_in_bed_window
 ),
-in_window AS (                                             -- STEP 2 — in_window: Take all epochs. Keep only epochs between: first sleep epoch and last sleep epoch
-  SELECT
-    es.*,                                                     -- es.*: All columns from v_epoch_stage
-    w.first_sleep_epoch,                                      -- then we add: first_sleep_epoch  last_sleep_epoch
-    w.last_sleep_epoch
-  FROM v_epoch_stage es
-  JOIN w ON w.session_id = es.session_id
-  WHERE es.epoch_index BETWEEN w.first_sleep_epoch AND w.last_sleep_epoch
-),
-counts AS (                                               -- STEP 3 — counts: 
-  SELECT                                                     -- these columns will define one row per session because they go into GROUP BY.
-    subject_code,
-    session_id,
-    session_code,
-    psg_filename,
-    first_sleep_epoch,
-    last_sleep_epoch,
-    COUNT(*) AS window_epochs,                               -- counts how many epochs exist inside the sleep window.
-    SUM(CASE WHEN stage IN ('N1','N2','N3','REM') THEN 1 ELSE 0 END) AS sleep_epochs,      -- conditional SUM (Sleep epochs): Each row: If stage is sleep → count 1 | Else → count 0  Total = number of sleep epochs
-    SUM(CASE WHEN stage = 'W' THEN 1 ELSE 0 END) AS wake_epochs,                           -- counts wake inside sleep window - approximates WASO (Wake After Sleep Onset)
-    SUM(CASE WHEN stage = 'UNKNOWN' THEN 1 ELSE 0 END) AS unknown_epochs,                  -- counts bad/missing labeling.
-    SUM(CASE WHEN stage = 'REM' THEN 1 ELSE 0 END) AS rem_epochs,                          -- counts each sleep stage individually -- 
-    SUM(CASE WHEN stage = 'N3'  THEN 1 ELSE 0 END) AS n3_epochs,                              -- eg.., How this works: If row is REM: Return epoch_index
-    SUM(CASE WHEN stage = 'N2'  THEN 1 ELSE 0 END) AS n2_epochs,                                                    -- If not: Return NULL
-    SUM(CASE WHEN stage = 'N1'  THEN 1 ELSE 0 END) AS n1_epochs,                                                    
-    MIN(CASE WHEN stage='REM' THEN epoch_index END) AS first_rem_epoch                        -- Then: If stage = REM → return epoch_index and MIN() picks the smallest REM epoch. That equals: First REM occurrence This is how you compute REM latency.
-  FROM in_window                                                                              -- NB: Otherwise → NULL is implied if you don’t specify an ELSE
-  GROUP BY subject_code, session_id, session_code, psg_filename, first_sleep_epoch, last_sleep_epoch
+counts AS (
+    SELECT
+        rec_id,
+        patients_code,
+        rec_code,
+        has_obs,
+        first_sleep_epoch,
+        COUNT(*) AS window_epochs, 
+        SUM(CASE WHEN stage_label IN ('N1','N2','N3','REM') THEN 1 ELSE 0 END) AS sleep_epochs,
+        SUM(CASE WHEN stage_label ='W' THEN 1 ELSE 0 END) AS wake_epochs,
+        SUM(CASE WHEN stage_label = 'UNKNOWN' THEN 1 ELSE 0 END) AS unknown_epochs,
+        SUM(CASE WHEN stage_label IN ('REM') THEN 1 ELSE 0 END) AS rem_epochs,
+        SUM(CASE WHEN stage_label IN ('N2','N3') THEN 1 ELSE 0 END) AS N2_N3_epochs,
+        MIN(CASE WHEN stage_label='REM' THEN epoch_idx END) AS first_rem_epoch
+    FROM w
+    GROUP BY rec_id, patients_code, rec_code, has_obs, first_sleep_epoch
 )
-SELECT                                                   -- FINAL SELECT: Now we convert counts into real metrics.
-  subject_code,
-  session_code,
-  psg_filename,
 
--- Output final KPIs - KPI = Key Performance Indicator
+SELECT 
+    rec_id,
+    patients_code,
+    rec_code,
+    has_obs,
 
-  -- Sleep window (minutes/hours)
-  ROUND(window_epochs * 30.0 / 60.0, 1) AS sleep_window_min,
-  ROUND(window_epochs * 30.0 / 3600.0, 2) AS sleep_window_h,
+  -- Output final KPIs - KPI = Key Performance Indicator
 
+  -- In bed window (minutes/hours)
+    ROUND(window_epochs * 30.0 / 60.0, 1) AS in_bed_window_min,
+    ROUND(window_epochs * 30.0 / 3600.0, 2) AS in_bed_window_h,
+  
   -- Total Sleep Time (TST)
-  ROUND(sleep_epochs * 30.0 / 60.0, 1) AS tst_min,
-  ROUND(sleep_epochs * 30.0 / 3600.0, 2) AS tst_h,
+    ROUND(sleep_epochs * 30.0 / 60.0, 1) AS tst_min,
+    ROUND(sleep_epochs * 30.0 / 3600.0, 2) AS tst_h,
 
-  -- Wake after sleep onset within the window (WASO proxy)
-  ROUND(wake_epochs * 30.0 / 60.0, 1) AS wake_in_window_min,
+   -- Wake after sleep onset within the window (WASO proxy)
+    ROUND(wake_epochs * 30.0 / 60.0, 1) AS wake_in_window_min,
 
-  -- Stage minutes
-  ROUND(n1_epochs * 30.0 / 60.0, 1) AS n1_min,
-  ROUND(n2_epochs * 30.0 / 60.0, 1) AS n2_min,
-  ROUND(n3_epochs * 30.0 / 60.0, 1) AS n3_min,
-  ROUND(rem_epochs * 30.0 / 60.0, 1) AS rem_min,
+  -- Stages duration
+    ROUND(rem_epochs * 30.0 / 60.0, 1) AS rem_min,
+    ROUND(N2_N3_epochs * 30.0 / 60.0, 1) AS N2_N3_min,
 
-  -- Percentages inside sleep window
-  ROUND(100.0 * sleep_epochs / window_epochs, 1) AS sleep_pct_window,
-  ROUND(100.0 * unknown_epochs / window_epochs, 1) AS unknown_pct_window,
+-- Percentages inside sleep window
+    ROUND(100.0 * sleep_epochs / window_epochs, 1) AS sleep_pct_window,
+    ROUND(100.0 * unknown_epochs / window_epochs, 1) AS unknown_pct_window,
 
-  -- Sleep efficiency within window
-  ROUND(1.0 * sleep_epochs / window_epochs, 3) AS sleep_eff_window,         -- Why multiply by 1.0? Forces floating-point division
+   -- Stages percentage of TST
+    ROUND(100.0 * rem_epochs / NULLIF(sleep_epochs,0), 1) AS rem_pct_tst,
+    ROUND(100.0 * N2_N3_epochs / NULLIF(sleep_epochs,0), 1) AS N2_N3_pct_tst,
+    ROUND(100.0 * wake_epochs / NULLIF(sleep_epochs,0), 1) AS wake_pct_tst,
 
-  -- Latencies (minutes)
-  ROUND(first_sleep_epoch * 30.0 / 60.0, 1) AS sleep_onset_min_from_recording_start,
+-- Sleep efficiency within window
+    ROUND(1.0 * sleep_epochs / window_epochs, 3) AS sleep_eff_window,         -- Why multiply by 1.0? Forces floating-point division
+
+-- Latencies (minutes)
+    ROUND(first_sleep_epoch * 30.0 / 60.0, 1) AS sleep_onset_min_from_recording_start,
   CASE
-    WHEN first_rem_epoch IS NULL THEN NULL                                  -- Prevents calculating REM latency on missing data. NB: if first_rem_epoch is NULL, the whole expression would return NULL anyway in SQLite, this is more 
-    ELSE ROUND((first_rem_epoch - first_sleep_epoch) * 30.0 / 60.0, 1)          
+    WHEN first_rem_epoch IS NULL THEN NULL                                  -- Prevents calculating REM latency on missing data 
+    ELSE ROUND((first_rem_epoch - first_sleep_epoch) * 30.0 / 60.0, 1)      -- NB: if first_rem_epoch is NULL, the whole expression would return NULL anyway in SQLite, this is more 
   END AS rem_latency_min
 FROM counts;

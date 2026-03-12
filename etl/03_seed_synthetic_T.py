@@ -14,14 +14,14 @@ def main(seed: int = 42) -> None:
     random.seed(seed)
 
     root = project_root()
-    db_path = root / "data_out" / "sleepedf_T.db"
+    db_path = root / "data_out" / "sleepedf_test.db"
 
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON;")
     cur = conn.cursor()
 
     # 1) Fill patient demographics if missing
-    cur.execute("SELECT patients_id, patients_code, age, sex, bmi FROM patients_T;")
+    cur.execute("SELECT patients_id, patients_code, age, sex, bmi FROM patients;")
     patients = cur.fetchall()
 
     for pid, code, age, sex, bmi in patients:
@@ -35,19 +35,19 @@ def main(seed: int = 42) -> None:
             bmi = random.randint(18, 34)
 
         cur.execute(
-            "UPDATE patients_T SET age=?, sex=?, bmi=? WHERE patients_id=?",
+            "UPDATE patients SET age=?, sex=?, bmi=? WHERE patients_id=?",
             (age, sex, bmi, pid),
         )
 
     # 2) Ensure every recording has a notes row + seed note values
-    cur.execute("SELECT rec_id FROM recordings_T;")
+    cur.execute("SELECT rec_id FROM recordings;")
     rec_ids = [r[0] for r in cur.fetchall()]
 
     for rec_id in rec_ids:
         # create row if missing
         cur.execute(
             """
-            INSERT OR IGNORE INTO notes_T(rec_id, had_coffee, had_alcohol, has_pain, sleep_deprived, stress)
+            INSERT OR IGNORE INTO notes(rec_id, had_coffee, had_alcohol, has_pain, sleep_deprived, stress)
             VALUES (?, 0, 0, 0, 0, 0)
             """,
             (rec_id,),
@@ -65,7 +65,7 @@ def main(seed: int = 42) -> None:
 
         cur.execute(
             """
-            UPDATE notes_T
+            UPDATE notes
             SET had_coffee=?, had_alcohol=?, has_pain=?, sleep_deprived=?, stress=?
             WHERE rec_id=?
             """,
