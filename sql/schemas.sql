@@ -30,10 +30,10 @@ PRAGMA foreign_keys = ON;       -- ensure FKs are enforced
 
 PRAGMA foreign_keys = OFF;      -- temporarily disable FK checks to drop tables in any order
 
-DROP TABLE IF EXISTS notes_T;
-DROP TABLE IF EXISTS epochs_T;
-DROP TABLE IF EXISTS recordings_T;
-DROP TABLE IF EXISTS patients_T;
+DROP TABLE IF EXISTS notes;
+DROP TABLE IF EXISTS epochs;
+DROP TABLE IF EXISTS recordings;
+DROP TABLE IF EXISTS patients;
 
 PRAGMA foreign_keys = ON;       -- re-enable FK checks
 

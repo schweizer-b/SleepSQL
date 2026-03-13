@@ -5,7 +5,7 @@
 -- functions used in queries.sql.
 --
 -- Run once after the database is built:
--- sqlite3 data_out/sleepedf.db ".read sql/indexes.sql"
+-- sqlite3 data_out/sleepedf_test.db ".read sql/indexes.sql"
 
 
 

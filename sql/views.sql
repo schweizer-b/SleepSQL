@@ -58,22 +58,24 @@ DROP VIEW IF EXISTS v_notes;
 
 CREATE VIEW v_notes AS 
 SELECT
-    rec_id,
-    had_coffee,
-    had_alcohol,
-    has_pain,
-    sleep_deprived,
-    stress,   
+    r.rec_id,
+    r.rec_code,
+    n.had_coffee,
+    n.had_alcohol,
+    n.has_pain,
+    n.sleep_deprived,
+    n.stress,   
     -- Boolean version (0 or 1)
     CASE            
-        WHEN (had_coffee + had_alcohol + has_pain + sleep_deprived + stress) > 0 
+        WHEN (n.had_coffee + n.had_alcohol + n.has_pain + n.sleep_deprived + n.stress) > 0 
         THEN 1
         ELSE 0
     END AS has_obs,
      -- Count of positive answers
-    (had_coffee + had_alcohol + has_pain + sleep_deprived + stress) 
+    (n.had_coffee + n.had_alcohol + n.has_pain + n.sleep_deprived + n.stress) 
     AS obs_count
-FROM notes;
+FROM notes n
+JOIN recordings r ON r.rec_id = n.rec_id;
 
 -- NB: ❌ SUM() cannot be used directly inside the same row like that
 -- ✅ only use SUM() when aggregating across rows
