@@ -24,6 +24,7 @@ dbeaver/
 *.pdf
 *.png
 *.txt
+*.pbix
 
 # BUT allow those in doc folder
 !docs/*.pdf

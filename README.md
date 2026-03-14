@@ -1,37 +1,9 @@
 # SleepSQL (Sleep-EDF → SQLite) — Sleep Staging Mini Warehouse
 
-This repo is a **learning / practice project** designed to build *transferable* SQL + data workflow skills (schema design, joins/aggregation, views, window functions, QA checks, exports to BI/Excel).
+This repo is a **learning / practice project** designed to build transferable SQL + data workflow skills (schema design, joins/aggregation, views, window functions, QA checks, exports to BI/Excel)
 
-It uses **Sleep-EDF (PhysioNet)** sleep-stage annotations (hypnogram EDF files) to build an **analysis-ready** SQLite database.  
-⚠️ **Some fields may be synthetic** (e.g., demographics and questionnaire-style flags) to practise joins, reporting, and cohort/QC logic.
-
----
-
-## What’s in the database (big picture)
-
-We do **not** store raw EEG samples in the database. Instead we store:
-
-- **patients** → who
-- **recordings** → which night/recording
-- **epochs** → 30-second slices of time per recording
-- **notes** → 1:1 “questionnaire” flags per recording (coffee/alcohol/stress etc.)
-
-From these tables we build **views** that compute sleep metrics such as:
-- sleep window / in-bed window
-- TST (Total Sleep Time)
-- sleep efficiency within the window
-- stage minutes (N1/N2/N3/REM/W)
-- REM latency
-- fragmentation proxies (stage transitions, awakenings)
-
----
-
-## Tech stack
-
-- **SQLite**: lightweight relational database stored as a single `.db` file
-- **sqlite3 CLI** (*command-line interface*): run schema/views/queries reproducibly
-- **Python** ETL (*extract–transform–load*): reads Sleep-EDF annotations and loads tidy tables
-- Optional: **DBeaver** (interactive DB client + ER diagrams), **Power BI**, **Excel**
+It uses **Sleep-EDF (PhysioNet)** sleep-stage annotations (hypnogram EDF files) to build an analysis-ready SQLite database.  
+NOTE: Some fields may be synthetic (e.g., demographics and questionnaire-style flags)
 
 ---
 
@@ -42,6 +14,43 @@ From these tables we build **views** that compute sleep metrics such as:
 - `etl/` — Python scripts (ETL + seeding)
 - `sql/` — schema, indexes, views, queries, QA tests
 - `docs/` — screenshots (ER diagram, Power BI, Excel dashboard)
+
+---
+
+## The database 
+
+Tables created:
+- **patients**    -> subjects/participants
+- **recordings**  -> which night/recording/session
+- **epochs**      -> 30-s slices per recording
+- **notes**       -> “questionnaire” flags/notes per recording (coffee/alcohol/stress etc.)
+
+NOTE: actual raw EEG samples are not stored in the database
+
+Big Picture / Relationships
+    - 1 patients → many recording (w no duplicate rec_code)
+    - 1 recording → many epochs (w no duplicate epoch_idx)
+    - 1 recording → 1 recording → 0 or 1 notes/questionnaire row
+    - 1 epoch → optionally many QC flags
+
+From these tables we build **views** that compute sleep metrics such as:
+- sleep window / in-bed window
+- TST (Total Sleep Time)
+- sleep efficiency within the window
+- stage minutes (N1/N2/N3/REM/W)
+- REM latency
+- fragmentation proxies (stage transitions, awakenings)
+
+ER diagram: `docs/SleepQC_Dashboard.png`
+
+---
+
+## Built with
+
+- **SQLite**: lightweight relational database stored as a single `.db` file
+- **sqlite3 CLI** (*command-line interface*): run schema/views/queries reproducibly
+- **Python** ETL (*extract–transform–load*): reads Sleep-EDF annotations and loads tables
+- **DBeaver** (interactive DB client + ER diagrams), **Power BI**, **Excel**
 
 ---
 
@@ -71,7 +80,7 @@ python etl/02_build_epochs.py
 ```
 
 ### 3) (Optional) Seed synthetic fields (for practice)
-This fills missing demographics (age/sex/BMI) and questionnaire-style notes (0/1 flags) using a reproducible random seed.
+This fills missing demographics (age/sex/BMI) and questionnaire-style notes (0/1 flags) using a reproducible random seed
 ```bash
 python etl/03_seed_synthetic.py
 ```
@@ -91,50 +100,35 @@ sqlite3 -header -column data_out/sleepedf_test.db ".read sql/queries.sql"
 
 ## Power BI / Excel exports
 
-This project uses three “BI-friendly” exports:
+Three “BI-friendly” exports:
 
 - `bi_nights.csv` — one row per recording/night (metrics + demographics + notes + derived QC)
 - `bi_stage_minutes.csv` — one row per (night × stage), great for stacked bar charts
 - `bi_fragmentation.csv` — fragmentation metrics (transitions, awakenings), normalised rates
 
-**Export tip:** on Windows (German locale), CSVs often open best with `;` as delimiter.  
-If you open a CSV and everything appears in one column, import via **Excel → Data → From Text/CSV** and choose the delimiter.
-
 ---
 
-## Suggested Power BI dashboard (one page)
+## Power BI dashboard (one page)
 
 **Tables**
-- Import: `bi_nights.csv` (main), `bi_stage_minutes.csv`, `bi_fragmentation.csv`
+- `bi_nights.csv` (main), `bi_stage_minutes.csv`, `bi_fragmentation.csv`
 
 **Relationships**
-- Join on `rec_id` (preferred), or `patients_code + rec_code` if you export those.
+- Join on `rec_id` 
 
 **Visuals**
-- KPI cards: Avg TST (h), Avg sleep efficiency, Avg REM latency, Pass rate
-- Stacked bar: stage minutes per night (from `bi_stage_minutes.csv`)
-- Scatter: TST vs efficiency, size = transitions, colour = pass_qc (from `bi_fragmentation.csv` + `bi_nights.csv`)
-- Table: night metrics + qc_reason + notes flags
+- KPI cards: Average TST (h), Average sleep efficiency (%), Average REM latency (min), QC pass rate (%)
+- Stacked column chart: stage minutes per night (from bi_stage_minutes.csv)
+- Scatter plot: TST vs sleep efficiency, bubble size = fragmentation proxy (awakenings/hour), colour = Passed QC (from bi_fragmentation.csv + bi_nights.csv)
+- Table: per-night metrics + qc_reason + notes flags
 
-Save screenshots to `docs/powerbi_dashboard.png` for your portfolio.
+Screenshot: `docs/SleepQC_Dashboard.png`
 
----
-
-## Excel mini-assignment (skills practice)
-
-Recommended workbook: `docs/SleepSQL_Excel_Analysis.xlsx`
-
-Tasks:
-- Use **XLOOKUP** to bring `pass_qc`, `qc_reason`, and fragmentation metrics into the main table
-- Create **PivotTables** comparing pass vs fail nights (Avg TST, efficiency, REM latency)
-- Stacked stage composition pivot + chart
-- Conditional formatting for low efficiency / high REM latency
-
-Save a screenshot to `docs/excel_dashboard.png`.
+NOTE: all metrics are calculated within the in-bed sleep window (from the first detected sleep epoch to the last detected sleep epoch)
 
 ---
 
-## SQL skills demonstrated
+## SQL skills practised 
 
 **Core**
 - SELECT / WHERE / ORDER BY
@@ -152,15 +146,4 @@ Save a screenshot to `docs/excel_dashboard.png`.
 
 ---
 
-## Notes on data provenance
 
-- Sleep staging labels are derived from **Sleep-EDF hypnogram annotations**.
-- Some demographic and questionnaire-style fields may be **synthetic** (seeded) for learning and reporting practice.
-- This repo is intended for educational/portfolio use.
-
----
-
-## Licence
-
-Add a licence if you plan to publish publicly (e.g., MIT).  
-If you include any Sleep-EDF files locally, keep them in `data_raw/` and out of git.
