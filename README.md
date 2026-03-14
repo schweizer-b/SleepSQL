@@ -28,10 +28,10 @@ Tables created:
 NOTE: actual raw EEG samples are not stored in the database
 
 Big Picture / Relationships
-    - 1 patients → many recording (w no duplicate rec_code)
-    - 1 recording → many epochs (w no duplicate epoch_idx)
-    - 1 recording → 1 recording → 0 or 1 notes/questionnaire row
-    - 1 epoch → optionally many QC flags
+- 1 patients → many recording (w no duplicate rec_code)
+- 1 recording → many epochs (w no duplicate epoch_idx)
+- 1 recording → 1 recording → 0 or 1 notes/questionnaire row
+- 1 epoch → optionally many QC flags
 
 From these tables we build **views** that compute sleep metrics such as:
 - sleep window / in-bed window
