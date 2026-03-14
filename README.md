@@ -41,7 +41,7 @@ From these tables we build **views** that compute sleep metrics such as:
 - REM latency
 - fragmentation proxies (stage transitions, awakenings)
 
-ER diagram: `docs/SleepQC_Dashboard.png`
+![ER diagram](docs/docs/ER_diagram.png)
 
 ---
 
@@ -122,7 +122,7 @@ Three “BI-friendly” exports:
 - Scatter plot: TST vs sleep efficiency, bubble size = fragmentation proxy (awakenings/hour), colour = Passed QC (from bi_fragmentation.csv + bi_nights.csv)
 - Table: per-night metrics + qc_reason + notes flags
 
-Screenshot: `docs/SleepQC_Dashboard.png`
+![SleepQC Dashboard](docs/SleepQC_Dashboard.png)
 
 NOTE: all metrics are calculated within the in-bed sleep window (from the first detected sleep epoch to the last detected sleep epoch)
 
