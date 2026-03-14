@@ -41,7 +41,7 @@ From these tables we build **views** that compute sleep metrics such as:
 - REM latency
 - fragmentation proxies (stage transitions, awakenings)
 
-![ER diagram](docs/docs/ER_diagram.png)
+![ER diagram](docs/ER_diagram.png)
 
 ---
 
